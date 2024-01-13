@@ -28,7 +28,7 @@ In a nutshell its job is to condition the environment and run ``make``.
 Actually it runs whatever the functions on the ``mk_run_hooks`` list
 run.  The default is ``mk_exec_make`` which will exec
 ``${REQUESTED_MAKE:-${REAL_MAKE:-${SB_MAKE_CMD:-${MAKE:-make}}}}``.
-This arrangemet allows a lot of flexibility.
+This arrangement allows a lot of flexibility.
 
 In this implementation ``mk`` is sourced by both 
 mksb_ and workon_ to handle environment setup in a consistent manner,
