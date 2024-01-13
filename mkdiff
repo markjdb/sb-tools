@@ -53,7 +53,7 @@ Mydir=`dirname $0`
 # eval_args will call this for unrecognized options
 opt_unknown=mkdiff_options
 # rc files can add to mkdiff_options_hooks 
-add_hooks mkdiff_options_hooks unknown_opt
+add_hooks mkdiff_options_hooks _unknown_opt
 mkdiff_options() {
     run_hooks mkdiff_options_hooks LIFO "$@"
 }

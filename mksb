@@ -183,7 +183,7 @@ __expMakeVars=
 # eval_args will call this for unrecognized options
 opt_unknown=mksb_options
 # rc files can add to mksb_options_hooks 
-add_hooks mksb_options_hooks unknown_opt
+add_hooks mksb_options_hooks _unknown_opt
 mksb_options() {
     run_hooks mksb_options_hooks LIFO "$@"
 }
