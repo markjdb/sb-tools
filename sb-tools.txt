@@ -63,7 +63,7 @@ to control the behavior.
 For example::
 
 	. $SB_TOOLS/os.sh
-	. $SB_TOOLS/test_opt.h
+	. $SB_TOOLS/test_opt.sh
 
 	# set test_L to -L or -h
 	test_opt L -h
