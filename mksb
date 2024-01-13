@@ -203,7 +203,6 @@ __help:f
 __tmpdir:f
 "
 opt_str=b:n:p:r:
-opt_b=.
 
 # vars we will export at the end
 # should be unset now
