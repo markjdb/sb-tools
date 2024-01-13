@@ -64,7 +64,7 @@ case "$name" in
 .) name=;;
 esac
 
-for b in "" . `IFS=:; echo $SB_BASE_PATH`
+for b in "" . `IFS=:; echo $SB_BASE`
 do
     sb=`find_sb ${b:+$b/}$name`
     test -d ${sb:-/dev/null} || continue
