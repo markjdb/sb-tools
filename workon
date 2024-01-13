@@ -1,0 +1,97 @@
+#!/bin/sh
+
+# NAME:
+#	workon - work in a sandbox
+#
+# SYNOPSIS:
+#	workon "SB" ["command"]
+#
+# DESCRIPTION:
+#	This script runs "command" (default $SHELL) in $SB after
+#	conditioning the environment in a maner similar to 'mk'
+#
+#	If invoked as other than 'workon' it runs the command
+#	associated with the name invoked - by turning the name into an
+#	uppercase variable name and using that with and without '_CMD'
+#	appended.
+#	
+#	The name 'build' is special; if '$BUILD_CMD' is not set, it
+#	checks for '$MK_CMD', '$MK' and if none are set, runs 'mk'.
+#
+# SEE ALSO:
+#	mk(1), mksb(1)
+#
+# AUTHOR:
+#	Simon J. Gerraty <sjg@crufty.net>
+#
+
+# RCSid:
+#	$Id: workon,v 1.15 2022/03/26 23:41:04 sjg Exp $
+#
+#	@(#) Copyright (c) 2009-2020 Simon J. Gerraty
+#
+#	This file is provided in the hope that it will
+#	be of use.  There is absolutely NO WARRANTY.
+#	Permission to copy, redistribute or otherwise
+#	use this file is hereby granted provided that 
+#	the above copyright notice and this notice are
+#	left intact. 
+#      
+#	Please send copies of changes and bug-fixes to:
+#	sjg@crufty.net
+#
+
+# tell 'mk' not to do anything
+MYNAME=workon
+unset SB
+
+Mydir=`dirname $0`
+. $Mydir/mk
+
+while :
+do
+    case "$1" in
+    --) shift; break;;          # stop trying to interpret anything
+    --doc) __doc;;              # does not return
+    --help) __help;;            # does not return
+    --help=*) __help ${1#--help=};;
+    *) break;;
+    esac
+done
+
+name=$1; shift
+case "$name" in
+.) name=;;
+esac
+
+for b in "" . `IFS=:; echo $SB_BASE_PATH`
+do
+    sb=`find_sb ${b:+$b/}$name`
+    test -d ${sb:-/dev/null} || continue
+    unset SB_BASE
+    sb_hooks $sb
+    SRCTOP="${SRCTOP:-${SB_SRC:-$SB/src}}"
+    test -d "$SRCTOP" && 'cd' "$SRCTOP"
+    break
+done
+test -d ${SB:-/dev/null} || error "cannot find '$name'"
+
+sb_run_hooks finish
+
+# this is our default action at the very end
+add_hooks workon_run_hooks workon_run
+workon_run() {
+    case $Myname in
+    $MYNAME) ;;
+    build) exec ${BUILD_CMD:-${MK_CMD:-${MK:-mk}}} "$@";;
+    *) CMDVAR=`echo $varMyname | toUpper`
+        eval "CMD=\${${CMDVAR}_CMD:-\${$CMDVAR}}"
+        test -z "$CMD" && error "do not know how to $Myname: '$CMDVAR[_CMD]' not set"
+        exec $CMD "$@"
+        ;;
+    esac
+    exec "${@:-${SHELL:-/bin/sh}}"
+}
+
+# we expect one of these to exec
+sb_run_hooks run "$@"

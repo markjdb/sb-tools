@@ -1,0 +1,194 @@
+#!/bin/sh
+
+# NAME:
+#	commit-sb - commit diff identified by token
+#
+# SYNOPSIS:
+#	commit-sb [options] "token"
+#
+# DESCRIPTION:
+#	This is a companion to mkdiff.
+#	We use "token" to find a diff and log message to commit.
+#
+#	Options:
+#
+#	-F "log"
+#		use "log" rather than the one associated with "token".
+#
+#	-f	force.  Needed for Git, if we did 'git add -N'
+#		(intent-to-add).
+#
+#	-i "token"
+#		just to avoid confusion.
+#
+#	-L "list"
+#		Use "list" of files rather than that derrived from
+#		"token".
+#
+#	-n	do nothing
+#
+#	-S	check status rather than commit
+#
+# SEE ALSO:
+#	mkdiff(1)
+#
+# AUTHOR:
+#	Simon J. Gerraty <sjg@crufty.net>
+
+# RCSid:
+#	$Id: commit-sb,v 1.7 2022/08/17 20:56:45 sjg Exp $
+#
+#	@(#) Copyright (c) 2020 Simon J. Gerraty
+#
+#	This file is provided in the hope that it will
+#	be of use.  There is absolutely NO WARRANTY.
+#	Permission to copy, redistribute or otherwise
+#	use this file is hereby granted provided that 
+#	the above copyright notice and this notice are
+#	left intact. 
+#      
+#	Please send copies of changes and bug-fixes to:
+#	sjg@crufty.net
+#
+
+MYNAME=commit_sb
+
+Mydir=`dirname $0`
+. $Mydir/hooks.sh
+
+# eval_args will call this for unrecognized options
+opt_unknown=commit_sb_options
+# rc files can add to commit_sb_options_hooks 
+add_hooks commit_sb_options_hooks unknown_opt
+commit_sb_options() {
+    run_hooks commit_sb_options_hooks LIFO "$@"
+}
+
+__x() {
+    set -x
+}
+
+long_opt_str="
+__x:f
+__doc:f
+__docs:f
+__help:f
+"
+
+opt_str=D:d:F:fi:L:nqS
+
+. $Mydir/mk
+
+tf=${TMPDIR:-/tmp}/.csb$$
+opt_d=$CVSROOT
+opt_L=$tf.L
+
+. $Mydir/eval_args.sh
+. $Mydir/scm-funcs.sh
+. $Mydir/commit-funcs.sh
+
+SKIP=${opt_n:+return}
+SKIP=${SKIP:-:}
+ECHO=${opt_q:+:}
+ECHO=${ECHO:-echo}
+
+if [ -s ${opt_D:-/dev/null} ]; then
+    [ -s ${opt_L:-/dev/null} ] && error "cannot supply -L list and -D diff"
+fi
+
+newer() {
+    'ls' -1t "$@" 2> /dev/null | head -1
+}
+
+is_newer() {
+    case `newer "$@"` in
+    $1) return 0;;
+    esac
+    return 1
+}
+
+if [ -s "${1:-/dev/null}" ]; then
+    # they supplied a list of files/dirs
+    [ -s ${opt_L:-/dev/null} ] && error "cannot supply -L list and files"
+    [ -s ${opt_D:-/dev/null} ] && error "cannot supply -D diff and files"
+    for f in "$@"
+    do
+	echo "$f"
+    done > $tf.L
+fi
+
+if [ -n "$opt_i" -o ! -s ${opt_L:-/dev/null} ]; then
+    set_cl_parts "${opt_i:-${1:-$opt_D}}"
+    opt_D=${opt_D:-$cl_diff}
+    opt_F=${opt_F:-$cl_log}
+    [ -s $opt_D ] || error "missing/empty diff: $cl_diff"
+    # sometimes we need to tweak the list
+    # of things to commit to include new dirs rather than the files
+    # they contain
+    if [ -s $cl_dl ] && is_newer $cl_dl $opt_D; then
+        [ -s $opt_L ] || opt_L=$cl_dl
+    else
+        diff2list < $opt_D > $tf.L
+    fi
+fi
+
+Do() {
+    $ECHO "+ $@"
+    $SKIP
+    "$@"
+}
+
+XargsDo() {
+    list=$1; shift
+    [ -z "$opt_X" ] || cp $list $opt_X
+    case "$ECHO" in
+    echo) xargs echo "+ $@" < $list;;
+    esac
+    $SKIP
+    tr '\012' '\000' < $list | xargs -0 "$@"
+}
+
+scm_opts=
+op_flags=
+case "$SCM" in
+cvs) scm_opts="-d $opt_d";;
+svn) op_flags=${opt_S:+-uv};;
+esac
+
+if [ -n "$opt_S" ]; then
+    run_hooks commit_sb_status_hooks
+
+    XargsDo "$opt_L" $SCM_CMD $scm_opts status $op_flags
+elif [ -s ${opt_F:-/dev/null} ]; then
+    run_hooks commit_sb_pre_commit_hooks
+    run_hooks commit_sb_commit_hooks
+
+    case "$SCM" in
+    git)
+	# ensure index is up to date
+	$SCM_CMD update-index -q --refresh
+	# there had better be no files already staged
+	if ! $SCM_CMD diff-index --quiet --cached HEAD --ignore-submodules --; then
+	    [ -z "$opt_f" ] && error "You have staged files - deal with them first, or add -f"
+	fi
+	XargsDo "$opt_L" $SCM_CMD add
+	Do $SCM_CMD $scm_opts commit $op_flags -F $opt_F
+	GIT_BRANCH=${GIT_BRANCH:-`$SCM_CMD branch -v | sed -n '/^\*/s,^. \([^ ]*\)[[:space:]].*,\1,p'`}
+	echo "Don't forget to: $SCM_CMD push origin $GIT_BRANCH"
+	;;
+    hg)
+        XargsDo "$opt_L" $SCM_CMD $scm_opts commit $op_flags -l $opt_F
+        ;;
+    *)
+        XargsDo "$opt_L" $SCM_CMD $scm_opts commit $op_flags -F $opt_F
+        ;;
+    esac
+    run_hooks commit_sb_post_commit_hooks
+else
+    error "missing -F log"
+fi
+x=$?
+rm -f $tf.*
+exit $x
+    
+    

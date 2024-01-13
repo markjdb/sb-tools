@@ -1,0 +1,476 @@
+#!/bin/sh
+
+# NAME:
+#	mksb - create a sandbox
+#
+# SYNOPSIS:
+#	mksb [options] [VAR="value"] [-p "SB_PROJECT"] -n "SB_NAME" ["args"]
+#
+# DESCRIPTION:
+#	This script creates a sandbox "SB_NAME" for "SB_PROJECT".
+#	Details of the SCM and URL to use are expected to come from
+#	an rc file, by itself 'mksb' does not know anything.
+#	See mk(1) for list of rc files read.
+#
+#	Strictly speaking 'mksb' is just an engine to run a set of
+#	hook functions, like 'mk' and 'workon' it runs
+#	${MYNAME}_begin_hooks and ${MYNAME}_pre_create_hooks
+#	before even creating $SB, then
+#	${MYNAME}_init_hooks and ${MYNAME}_setup_hooks
+#	and ${MYNAME}_finish_hooks at the end.
+#
+#	In between we also run a set of  mksb_env hooks and 
+#	mksb_checkout hooks in each case following the pattern
+#	_init_hooks _setup_hooks _hooks and _finish_hooks.
+#
+#	Any of the env hooks may add variables to the '.sandbox-env' file
+#	that 'mk' and 'workon' read by calling the functions
+#
+#	expMakeVars ['?='] "VAR"[="value"] ...
+#		Adds VAR=value or VAR?=value to '$SB/Makefile.inc'.
+#
+#	expShellVars "VAR"[="value"] ...
+#		Simply adds VAR=value
+#		Any variable named in evVars will be passed to this.
+#	
+#	expShellDefVars "VAR"[="value"] ...
+#		Like expShellVars but adds VAR=${VAR:-value}
+#		Any variable named in evDefVars will be passed to this.
+#
+#	expShellVarsLiteral "VAR"[="value"] ...
+#		Like expShellVars but uses single quotes.
+#		This is useful for cases like:
+#		MAKEOBJDIR='${.CURDIR:S,${SRCTOP},${OBJTOP},}'
+#		which is to be interpreted by 'bmake' rather than
+#		the shell.
+#		Any variable named in evLiteralVars will be passed to this.
+#	
+#
+#	All of the above functions can also be called from command
+#	line as --expShellVars=VAR[=value]
+#
+#	Any remaining "args" are passed to mksb_checkout_{init,setup}_hooks
+#
+#	Options:
+#
+#	-b "SB_BASE"
+#		If $SB_NAME is just a basename it is
+#		created under $SB_BASE, default is '.'
+#
+#	-n "SB_NAME"
+#		Name the sandbox.  If not an absolute path
+#		SB will be $SB_BASE/$SB_NAME
+#		Eventually SB_NAME will just be the basename of SB.
+#
+#	-p "SB_PROJECT"
+#		Almost everything we do is dictated by $SB_PROJECT.
+#		
+#	-r "opt_r"
+#		What "opt_r" means depends on $SB_PROJECT
+#
+#	Long options (less commonly used):
+#
+#	--doc	Show this and run doc_hooks to show
+#		associated documentation.
+#
+#	--docs
+#		Show this and any block comments marked by '##[*=~-]'.
+#		Then run docs_hooks.
+#
+#	--export "var"[="value"]
+#		Export "var" with optional "value".
+#
+#	--help[="topic"]
+#		Show help for "topic", what that means depends on help
+#		functions and hooks set by rc files.
+#		With no "topic" and no help functions or hooks,
+#		behaves the same as --doc.
+#
+#	--no-checkout
+#		Sets SKIP_CHECKOUT=: so checkout hooks can be skipped.
+#
+#	--rc="rc"
+#		Source the file "rc".
+#
+#	--sb-opt-*={yes,no}
+#		Set arbitrary knobs - see sb-opt.sh
+#
+#	--tmpdir="TMPDIR"
+#		Set TMPDIR as requested and make sure it exists.
+#		Variables like $SB should be escaped.
+#
+# BUGS:
+#	expShellVarsLiteral can be bad for anything to be consumed by
+#	shell scripts.
+#
+# SEE ALSO:
+#	mk(1), workon(1)
+#
+# AUTHOR:
+#	Simon J. Gerraty <sjg@crufty.net>
+#
+
+# RCSid:
+#	$Id: mksb,v 1.40 2023/06/13 20:45:50 sjg Exp $
+#
+#	@(#) Copyright (c) 2009-2020 Simon J. Gerraty
+#
+#	This file is provided in the hope that it will
+#	be of use.  There is absolutely NO WARRANTY.
+#	Permission to copy, redistribute or otherwise
+#	use this file is hereby granted provided that 
+#	the above copyright notice and this notice are
+#	left intact. 
+#      
+#	Please send copies of changes and bug-fixes to:
+#	sjg@crufty.net
+#
+
+MYNAME=mksb
+unset SB
+
+Mydir=`dirname $0`
+
+# we need these early
+. $Mydir/hooks.sh
+. $Mydir/atexit.sh
+. $Mydir/debug.sh
+
+# remember what we got - record in $ev
+mksb_cmd_args="$@"
+
+SKIP_CHECKOUT=
+__no_checkout() {
+    SKIP_CHECKOUT=:
+}
+
+__export() {
+    it="$1"
+    case "$1" in
+    "") ;;
+    *=*) eval_export "$1";;
+    *) export $1;;
+    esac
+}
+
+__rc() {
+    source_rc $1
+}
+
+__tmpdir() {
+    eval "TMPDIR='$1'"
+    add_hooks mksb_env_finish_hooks mksb_tmpdir
+}
+
+mksb_tmpdir() {
+    (umask 002; eval "mkdir -p $TMPDIR")
+    evVars="$evVars TMPDIR"
+    return 0
+}
+
+DebugOn mksb
+
+opt_n=
+opt_p=
+opt_b=
+opt_r=
+__expShellDefVars=
+__expShellVars=
+__expShellVarsLiteral=
+__expMakeDefVars=
+__expMakeVars=
+
+# eval_args will call this for unrecognized options
+opt_unknown=mksb_options
+# rc files can add to mksb_options_hooks 
+add_hooks mksb_options_hooks unknown_opt
+mksb_options() {
+    run_hooks mksb_options_hooks LIFO "$@"
+}
+
+long_opt_str="
+__expShellDefVars:a.
+__expShellVars:a.
+__expShellVarsLiteral:a.
+__expMakeDefVars:a.
+__expMakeVars:a.
+__export:f
+__rc:f
+__no_checkout:f
+__doc:f
+__docs:f
+__help:f
+__tmpdir:f
+"
+opt_str=b:n:p:r:
+opt_b=.
+
+# vars we will export at the end
+# should be unset now
+evVars="SB_PATH SB_SRC SB_OBJROOT MAKESYSPATH MAKEOBJDIRPREFIX"
+evVarsLiteral="SB_PROJECT SB_OBJTOP MAKEOBJDIR"
+evDefVars=
+evMakeVars=
+evMakeDefVars=
+
+unset $evVars $evVarsLiteral
+
+DebugOn mksb_begin
+
+# just incase these are called too early
+for f in expShellDefVars \
+	     expShellVars \
+	     expShellDefVars \
+	     expShellVars \
+	     expShellVarsLiteral
+do
+    eval "$f() { __$f=\"\$__$f \$@\"; }"
+done
+
+# this one is slightly more complicated
+expMakeVars() {
+    case "$1" in
+    *=) shift; __expMakeDefVars="$__expMakeDefVars $@";;
+    *)	__expMakeVars="$__expMakeVars $@";;
+    esac
+}
+
+SKIP_FIND_SB=:
+
+. $Mydir/mk
+. $Mydir/sb-opt.sh
+. $Mydir/eval_args.sh
+
+test -z "$opt_n" && error "need a sandbox name: -n sb"
+
+SB_PROJECT=${opt_p:-$SB_PROJECT}
+
+case "$opt_n" in
+/*) sb=$opt_n;;
+*) sb=${opt_b:-${SB_BASE:-.}}/$opt_n;;
+esac
+SB_NAME=`basename $sb`
+SB_BASE=${opt_b:-${SB_BASE:-.}}
+
+run_hooks mksb_pre_create_hooks
+
+mkdir -p "$sb"
+SB=`cd "$sb" && $pwd`
+case "$SB_BASE" in
+.) check_home=;;
+*) check_home=: ;;
+esac
+SB_BASE=`cd "$SB_BASE" && $pwd`
+# sanity checks
+case "$check_home$SB_BASE" in
+"$HOME")
+    case "$SB" in
+    $HOME/$SB_NAME) ;; # really mean it?
+    *) SB_BASE=`dirname $SB`;;
+    esac
+    ;;
+esac
+case $SB in
+$SB_BASE/*) ;;
+*) SB_BASE=`dirname $SB`;;
+esac
+
+sb_hooks $sb
+
+sb_ev=$SB/$ev
+sb_make_inc=$SB/Makefile.inc
+[ -s $sb_make_inc ] && mv $sb_make_inc  $sb_make_inc.old
+
+mksb_tf=${TEMP:-/tmp}/.mksb.$USER.$$
+
+atexit _mksb_cleanup
+_mksb_cleanup() {
+    $DEBUG_DO 'ls' -l $mksb_tf.*
+    $DEBUG_SKIP rm -f $mksb_tf.*
+}
+
+MKSB_SED_ENV_CMD=$mksb_tf.sed
+
+_MKSB_SED_ENV_VARS_MIN="SB/ SB_BASE/ HOME/ HOST_TARGET/"
+MKSB_SED_ENV_VARS="$_MKSB_SED_ENV_VARS_MIN"
+export MKSB_SED_ENV_CMD MKSB_SED_ENV_VARS
+
+_sedev_seen=
+_mksb_sedev() {
+    for v in $*
+    do
+        case ",$_sedev_seen," in
+        *,$v,*) continue;;
+        esac
+        _sedev_seen=$_sedev_seen,$v
+        case "$v" in
+        */) s=/
+            if $isPOSIX_SHELL; then
+                v=${v%/}
+            else
+                v=`expr $v : '\(.*\)/'`
+            fi
+            eval _val=\$$v
+            if [ "x$_val" = x ]; then
+                warning "sedenv: $v is not set"
+                continue
+            fi
+            eval echo "s,\$$v\\\$,\\\${$v},"
+            ;;
+        *)  s=
+            eval _val=\$$v
+            if [ "x$_val" = x ]; then
+                warning "sedenv: $v is not set"
+                continue
+            fi
+            ;;
+        esac
+        eval echo "s,\$$v$s,\\\${$v}$s,g"
+    done
+}
+
+mksb_mksedenv() {
+    if [ ! -s $MKSB_SED_ENV_CMD.min ]; then
+        _mksb_sedev $_MKSB_SED_ENV_VARS_MIN > $MKSB_SED_ENV_CMD.min
+        _sedev_seen=
+        _mksb_sedev $MKSB_SED_ENV_VARS > $MKSB_SED_ENV_CMD
+    fi
+    _mksb_sedev $* >> $MKSB_SED_ENV_CMD
+}
+
+# attempt to make the sandbox portable.
+sedEnv() {
+    [ -s $MKSB_SED_ENV_CMD ] || mksb_mksedenv
+    sed -f $MKSB_SED_ENV_CMD$1
+}
+
+_evVarVal() {
+    case "$1" in
+    *=*) eval "$1"
+         var=`IFS==; set -- $1; echo $1`
+         ;;
+    *)   var=$1;;
+    esac
+    eval "val=\$$var"
+}
+
+##
+# expShellDefVars var[=value] ...
+#
+# add var to .sandbox-env as var="${var:-$value}"
+#
+expShellDefVars() {
+    sedflags=
+    case "$1" in
+    .min) sedflags=$1; shift;;
+    esac
+    for var in $*
+    do
+	_evVarVal $var
+	case "$val" in
+	"")	;;
+	*)	echo "$var=\${$var:-$val}; export $var";;
+	esac
+    done | sedEnv $sedflags >> $sb_ev
+}
+
+##
+# expShellVars var[=value] ...
+#
+# add var to .sandbox-env as var="$value"
+#
+expShellVars() {
+    sedflags=
+    case "$1" in
+    .min) sedflags=$1; shift;;
+    esac
+    for var in $*
+    do
+	_evVarVal $var
+	case "$val" in
+	"")	;;
+	*)	echo "$var=\"$val\"; export $var";;
+	esac
+    done | sedEnv $sedflags >> $sb_ev
+}
+
+##
+# expShellVarsLiteral var[=value] ...
+#
+# add var to .sandbox-env as var='$value'
+#
+expShellVarsLiteral() {
+    for var in $*
+    do
+	_evVarVal $var
+	case "$val" in
+	"")	;;
+	*)	echo "$var='$val'; export $var";;
+	esac
+    done | sedEnv .min >> $sb_ev
+}
+
+##
+# expMakeVars [?=] var[=value] ...
+#
+# add var to $SB/Makefile.inc using '?=' or '='
+#
+expMakeVars() {
+    case "$1" in
+    \?*) eq='?='; shift;;
+    *)	eq='=';;
+    esac
+    tmfi=$mksb_tf.mfi
+    for var in $*
+    do
+	_evVarVal $var
+	case "$val" in
+	"")	;;
+	*)	echo "$var$eq$val";;
+	esac
+    done > $tmfi
+    [ -s $tmfi ] && sedEnv < $tmfi >> $sb_make_inc
+}
+
+DebugOn mksb_ev
+
+# create $sb_ev
+[ -s $sb_ev ] && mv $sb_ev $sb_ev.old
+echo "# SB will be set by 'mk' et al" > $sb_ev
+# make sure this correct even if $SB is renamed.
+echo 'SB_NAME=`basename $SB`; export SB_NAME' >> $sb_ev
+echo 'SB_BASE=${SB_BASE:-`dirname $SB`}; export SB_BASE' >> $sb_ev
+echo "# $0 $mksb_cmd_args" >> $sb_ev
+
+# deal with anything we got from command line
+expShellDefVars $__expShellDefVars
+expShellVars $__expShellVars
+expShellVarsLiteral $__expShellVarsLiteral
+expMakeVars $__expMakeVars
+expMakeVars '?' $__expMakeDefVars
+
+# do this in multiple layers so later ones
+# affected by earlier ones
+run_hooks mksb_env_init_hooks
+run_hooks mksb_env_setup_hooks
+run_hooks mksb_env_hooks
+run_hooks mksb_env_finish_hooks
+
+# deal with anything we got from hooks above
+# we assume order isn't critical or hook would
+# have call exp* directly, so we sort -u the list.
+expShellDefVars `sort_list -u $evDefVars`
+expShellVars `sort_list -u $evVars`
+expShellVarsLiteral `sort_list -u $evVarsLiteral`
+expMakeVars `sort_list -u $evMakeVars`
+expMakeVars '?' `sort_list -u $evMakeDefVars`
+
+. $sb_ev
+
+# any args not consumed by now are likely for checkout hooks
+run_hooks mksb_checkout_init_hooks "$@"
+run_hooks mksb_checkout_setup_hooks "$@"
+run_hooks mksb_checkout_hooks
+run_hooks mksb_checkout_finish_hooks
+
+run_hooks mksb_finish_hooks

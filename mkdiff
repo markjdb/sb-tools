@@ -1,0 +1,127 @@
+#!/bin/sh
+
+# NAME:
+#	mkdiff - generate diff and template log message
+#
+# SYNOPSIS:
+#	mkdiff [options] [token] [path ...]
+#
+# DESCRIPTION:
+#	This script will capture a diff named
+#	$COMMIT_LOGS/$token.diff
+#	and a template log message in $COMMIT_LOGS/$token$COMMIT_LOG_EXT
+#
+#	If no "token" is supplied we just capture the diff in
+#	d%Y%m%d (or whatever MKDIFF_DATE_FMT is set to).
+#
+#	Options:
+#
+#	-q	suppress '?' lines
+#
+#	-N	show new files (CVS only)
+#
+# SEE ALSO:
+#	commit-sb(1)
+#
+# AUTHOR:
+#	Simon J. Gerraty <sjg@crufty.net>
+
+# RCSid:
+#	$Id: mkdiff,v 1.5 2022/09/02 15:50:51 sjg Exp $
+#
+#	@(#) Copyright (c) 2020 Simon J. Gerraty
+#
+#	This file is provided in the hope that it will
+#	be of use.  There is absolutely NO WARRANTY.
+#	Permission to copy, redistribute or otherwise
+#	use this file is hereby granted provided that 
+#	the above copyright notice and this notice are
+#	left intact. 
+#      
+#	Please send copies of changes and bug-fixes to:
+#	sjg@crufty.net
+#
+
+MYNAME=mkdiff
+
+# some defaults
+MKDIFF_DATE_FMT=d%Y%m%d
+
+Mydir=`dirname $0`
+. $Mydir/hooks.sh
+
+# eval_args will call this for unrecognized options
+opt_unknown=mkdiff_options
+# rc files can add to mkdiff_options_hooks 
+add_hooks mkdiff_options_hooks unknown_opt
+mkdiff_options() {
+    run_hooks mkdiff_options_hooks LIFO "$@"
+}
+
+__fmt() {
+    MKDIFF_DATE_FMT=$1
+}
+
+__template() {
+    COMMIT_LOG_TEMPLATE=$1
+}
+
+
+long_opt_str="
+--fmt:f
+--template:f
+__doc:f
+__help:f
+"
+
+# some scm diffs take -x flags
+opt_str=Nqx.
+
+. $Mydir/mk
+. $Mydir/eval_args.sh
+. $Mydir/scm-funcs.sh
+. $Mydir/commit-funcs.sh
+
+
+if [ $# -eq 0 ]; then
+    log=`date "+$MKDIFF_DATE_FMT"`
+    scm_diff > $log
+    echo $log
+    exit 0
+fi
+token=$1; shift
+set_cl_parts $token
+
+mkdiff_log_template() {
+    if [ ! -s $cl_log ]; then
+        if [ -s ${COMMIT_LOG_TEMPLATE:-/dev/null} ]; then
+            sed $MKDIFF_LOG_SEDS $COMMIT_LOG_TEMPLATE > $cl_log
+        else
+            cat << EOF > $cl_log
+
+PR: $PR
+Reviewed by:
+EOF
+        fi
+    fi
+    echo Do not forget to edit $cl_log
+}
+
+filter_diff() {
+    case "$opt_q" in
+    "") cat;;
+    *) grep -v '^?';;
+    esac
+}
+
+mkdir -p `dirname $cl_diff`
+if [ ! -s $cl_log ]; then
+    if [ -n "$PR" ]; then
+        MKDIFF_LOG_SEDS="-e s,%PR%,$PR, $MKDIFF_LOG_SEDS"
+    fi
+    MKDIFF_LOG_SEDS="$MKDIFF_LOG_SEDS -e \"s,%USER%,$USER,\""
+    run_hooks mkdiff_log_template_hooks
+    mkdiff_log_template
+fi
+scm_diff $opt_x $opt_N "$@" | filter_diff > $cl_diff
+echo $cl_diff
