@@ -17,7 +17,7 @@
 #
 # DESCRIPTION:
 #	The functions add_hooks and run_hooks are retained for
-#	backwards compatability.  They are aliases for hooks_add_all and
+#	backwards compatibility.  They are aliases for hooks_add_all and
 #	hooks_run.
 #	
 #	hooks_add_all simply adds the "func"s to the list "HOOKS".

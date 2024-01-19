@@ -710,7 +710,7 @@ As noted above you can also do::
 	source_rc $HOME/mksb.d/*.rc
 
 in ``$HOME/.sandboxrc`` which is what I do, so simply
-puting ``hg-bmake.rc`` in ``$HOME/mksb.d/`` is all that is needed.
+putting ``hg-bmake.rc`` in ``$HOME/mksb.d/`` is all that is needed.
 
 ``hg-bmake.rc`` contains a few functions which are added to hook lists.
 The first is ``hg_bmake_doc``::
