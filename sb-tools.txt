@@ -274,7 +274,7 @@ functions to help populate ``.sandbox-env``:
 
 	Like ``expShellVars`` but adds ``VAR=${VAR:-value}; export VAR``
 
-``expShellLiteralVars VAR ...``
+``expShellVarsLiteral VAR ...``
 
 	Like ``expShellVars`` but uses single quotes.
 	This is useful for cases like:
@@ -330,7 +330,7 @@ it uses `eval_args.sh`_ to process its command line.
 Apart from supporting both long and short options, ``eval_args.sh``
 also handles ``VAR=VALUE`` assignments - with special handling if needed.
 	
-``--expShellVars=VAR[=value] --expShellDefVars=VAR[=value] --expShellLiteralVars=VAR[=value]``
+``--expShellVars=VAR[=value] --expShellDefVars=VAR[=value] --expShellVarsLiteral=VAR[=value]``
 
 	As described above for ``expShellVars`` etc.
 	If no *value* is provided, it is assumed to have been set
