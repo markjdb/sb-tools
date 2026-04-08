@@ -4,8 +4,11 @@
 #
 # SYNOPSIS:
 #	git-up.sh [options]
+#	git up [options]
 #
 # DESCRIPTION:
+#	If installed as 'git-up' then 'git' will run it for 'up'.
+#
 #	We first fetch the latest content of the upstream repo.
 #	If that fails or there are no changes we are done.
 #
@@ -36,16 +39,11 @@
 
 
 # RCSid:
-#	$Id: git-up.sh,v 1.16 2023/01/28 01:01:15 sjg Exp $
+#	$Id: git-up.sh,v 1.18 2025/08/07 21:59:54 sjg Exp $
 #
-#	@(#) Copyright (c) 2018-2021 Simon J. Gerraty
+#	@(#) Copyright (c) 2018-2025 Simon J. Gerraty
 #
-#	This file is provided in the hope that it will
-#	be of use.  There is absolutely NO WARRANTY.
-#	Permission to copy, redistribute or otherwise
-#	use this file is hereby granted provided that 
-#	the above copyright notice and this notice are
-#	left intact. 
+#	SPDX-License-Identifier: BSD-2-Clause
 #      
 #	Please send copies of changes and bug-fixes to:
 #	sjg@crufty.net
@@ -55,6 +53,9 @@ case "/$0" in
 */git-up*)
     MYNAME=gitup
     Mydir=`dirname $0`
+    case ",$DEBUG_SH," in
+    *,$MYNAME,*) set -x;;	# we don't have DebugOn yet
+    esac
     # let this set SB_TOOLS if it wants
     rc=$Mydir/git-up.rc
     if [ -s $rc ]; then
@@ -62,9 +63,10 @@ case "/$0" in
     fi
     SB_TOOLS=${SB_TOOLS:-$Mydir}
     PATH=$SB_TOOLS:$PATH
-    . debug.sh
     . sb-funcs.sh
+    $_DEBUG_SH . debug.sh
     DebugOn gitup gituprc
+    : SB=$SB
     if [ -z "$SB" ]; then
         SB=`find_sb`
         if [ -s ${SB:-/dev/null} ]; then
@@ -72,9 +74,12 @@ case "/$0" in
             # we really only care about SB_GIT_BRANCH
             sb_hooks $SB
             'cd' $here
+	else
+            # this should help find $rc
+            SRCTOP=`find_it --dir -d .git`
 	fi
     fi
-    for d in $HOME $SB/.. $SB
+    for d in $HOME $SB/.. $SB $SRCTOP/.. $SRCTOP
     do
         source_once $d/git-up.rc
     done

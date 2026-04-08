@@ -1,111 +1,210 @@
 Sandbox tools
 *************
 
-As far as I know, the concept of a sandbox and the tools ``mksb`` and
-``mk`` come from the OSF Development Environment (ODE).
+As far as I know, the concept of a sandbox and the tools ``mksb``,
+``mk`` and ``workon`` come from the OSF Development Environment (ODE).
 
 The scripts described here implement the idea but not necessarily in a
 compatible manner. 
 
+This is actually my second implementation of these tools.
+It is more generic, and has a more regular arrangement of *hooks* callouts.
 
 Introduction
 ============
 
-A *sandbox* is simply a software source tree with a special
-file ``.sandbox-env`` which serves both to mark the location of
-the sandbox (the variable ``SB`` is set to the directory where
-``.sandbox-env`` was found) and provide a set of environment variables
-for it.
+A *sandbox* is simply a tree with a special file ``.sandbox-env``
+which serves both to mark the location of the sandbox (the variable
+``SB`` is set to the directory where ``.sandbox-env`` was found) and
+provide a set of environment variables for it.
 
-Below we describe some of the tools that work within this ecosystem.
-I've been using this setup for over 20 years and find it very useful.
+Sandbox setup files
+-------------------
+
+Apart from ``$SB/.sandbox-env``, there are many files that will be read
+(if they exist) to help setup the `sandbox environment`_.
+
+All of the tools described below set ``MYNAME`` to their canonical
+name and ``Myname`` to the name they were invoked as.
+I use ``SB_TOOLS`` to refer to the directory where the tools are
+found.
+
+For backwards compatability with my original implementation, (and ODE)
+we look for ``.sandboxrc`` in ``$HOME``, ``$SB/..``, and ``$SB``.
+
+In addition, we look for the following in ``$SB_TOOLS``::
+
+	sandbox.rc
+	sandbox.d/*.rc
+	sb-env.rc
+	sb-env.d/*.rc
+	${MYNAME}.rc
+	${MYNAME}.d/*.rc
+
+and in any directories listed in ``$SB_RC_DIR_LIST`` (default is
+``$HOME``) we look for::
+
+	.sandboxrc
+	sandbox.d/*.rc
+	${MYNAME}.d/*.rc
+
+We may have ``SB_PROJECT`` to describe what the tree is for
+(eg. ``FreeBSD``, ``NetBSD`` etc.)  Lots of setup is dictated
+by ``$SB_PROJECT``.
+
+We typically get ``SB_PROJECT`` from ``$SB/.sandbox-env`` (mksb_ gets
+it from the command line) and once it is known, we look for a number
+of filenames derrived from it (``$p`` below) under
+``$SB_TOOLS`` and any ``$SB_RC_DIR_LIST`` matching::
+
+	sb-project.d/$p.rc
+	${MYNAME}-project.d/$p.rc
+
+The use of ``${MYNAME}.d/*.rc`` and ``*-project.d/*.rc``
+help avoid reading config which is not relevant to the current
+operation or project.
+
+Any of the ``*.rc`` files read, can set variables directly, though it
+is usually more flexible and scalable to use functions added to
+various *hook* lists which will be run at appropriate times - as
+detailed under mk_ below.
+
+This arrangement is very flexible, and makes it easy for sites to
+customize without the need to edit the tools themselves, which makes
+updating simple.
+
+Sandbox tools
+=============
+
+Below I describe some of the tools that work within this ecosystem.
+I've been using this setup since 2000 and find it very useful.
 
 mk
 --
 
 This is the most commonly used tool.
-In a nutshell its job is to condition the environment and run ``make``.
+In a nutshell; its job is to condition the environment and run ``make``.
+
 Actually it runs whatever the functions on the ``mk_run_hooks`` list
 run.  The default is ``mk_exec_make`` which will exec
 ``${REQUESTED_MAKE:-${REAL_MAKE:-${SB_MAKE_CMD:-${MAKE:-make}}}}``.
-This arrangemet allows a lot of flexibility.
+This arrangement allows a lot of flexibility.
 
-In this implementation ``mk`` is sourced by both 
-mksb_ and workon_ to handle environment setup in a consistent manner,
-each sets ``MYNAME`` to its canonical name.
+In this implementation, ``mk`` is sourced by both 
+mksb_ and workon_ to handle environment setup in a consistent manner.
+Each sets ``MYNAME`` to its canonical name.
 
-The following files are read (if they exist) in this order::
+To begin with, the following files are read (if they exist) in this order::
 
+	$SB_TOOLS/sandbox.rc
+	$SB_TOOLS/sandbox.d/*.rc
 	$SB_TOOLS/sb-env.rc
 	$SB_TOOLS/sb-env.d/*.rc
 	$SB_TOOLS/$MYNAME.rc
 	$SB_TOOLS/$MYNAME.d/*.rc
-	$HOME/.sandboxrc
 
-``SB_TOOLS`` is of course the directory where ``mk`` and friends are found.
-Using ``*.d/*.rc`` makes it very easy to extend.
+``SB_TOOLS`` is the directory where ``mk`` and friends are found.
+Using ``*.d/*.rc`` makes it very easy to extend or customize without
+having to edit the scripts themselves.
 
-Actually ``$HOME/.sandboxrc`` is just the default value for ``SB_RCFILES``.
-Users can do similar via ``$HOME/.sandboxrc``, I use::
+We next check if user rc files should be read and if so,
+add ``$HOME`` to ``SB_RC_DIR_LIST``::
 
-	source_rc $HOME/sb-env.d/*.rc
-	source_rc $HOME/$MYNAME.d/*.rc
+	_mk_opt yes SB_USER_RC
+	if [ $MK_SB_USER_RC = yes ]; then
+	    add_list_once SB_RC_DIR_LIST $HOME
+	fi
 
-	add_hooks mk_setup_hooks my_projects
-	my_projects() {
-	    # we have SB_PROJECT by now
-	    source_rc $HOME/sb-project.d/$SB_PROJECT.rc
-	    return 0
-	}
+and for every ``dir`` listed in ``$SB_RC_DIR_LIST`` we will look for::
 
-Any of the above can contribute hook functions called via run_hooks_
-to control the behavior.
+	$dir/.sandboxrc
+	$dir/sandbox.d/*.rc
+	$dir/${MYNAME}.d/*.rc
+
+This is somewhat different from (and better than ;-) the original
+implementation I did, which we still use at work.
+There my ``$HOME/.sandboxrc`` compensates with the below so that the
+behavior is equivalent::
+
+	$_HAVE_SH . $SB_TOOLS/have.sh
+	
+	have source_rc || . source.sh
+	
+	if ! have _absdir; then
+	    # this is all done automatically by crufty mk
+	    $_MKOPT_SH . mkopt.sh
+	    source_rc $HOME/sandbox.d/*.rc
+	    source_rc $HOME/$MYNAME.d/*.rc
+	
+	    add_hooks mksb_project_hooks my_projects
+	    add_hooks sb_setup_hooks my_projects
+	
+	    my_projects() {
+	        # we should have SB_PROJECT by now
+	        local list p
+	        list=$SB_PROJECT
+	        case "$SB_PROJECT" in
+	        *[A-Z.-]*)               # more work to do
+	            # mimic crufty sb_project_init
+	            case "$SB_PROJECT" in
+	            *-*) hooks_add list ${SB_PROJECT%%-*};;
+	            *.*) hooks_add list ${SB_PROJECT%%.*};;
+	            esac
+	            case "$SB_PROJECT" in
+	            *[A-Z]*) hooks_add list `echo $list | toLower`;;
+	            esac
+	            case "$MYNAME" in
+	            mksb)
+	                for p in $list
+	                do
+	                    hooks_add_once list "$p*"
+	                done
+	                ;;
+	            esac
+	            ;;
+		esac
+		for p in $list
+		do
+		    source_rc --once $HOME/sb-project.d/$p.rc \
+		    $HOME/${MYNAME}-project.d/$p.rc
+		done
+	        return 0
+	    }
+	fi
+
+Any of the rc files can contribute hook functions called via
+run_hooks_ to control the behavior.
 For example::
-
-	. $SB_TOOLS/os.sh
-	. $SB_TOOLS/test_opt.h
-
-	# set test_L to -L or -h
-	test_opt L -h
 
 	add_hooks mk_target_machine_hooks mk_target_machine_xtra
 
 	mk_target_machine_xtra() {
+	    export HOST_OBJTOP=$SB_OBJROOT$HOST_TARGET
+	    export HOST_OBJTOP32=$SB_OBJROOT$HOST_TARGET32
+	
 	    case "$MACHINE" in
-	    host32) OBJTOP=$OBJROOT/$HOST_TARGET32;;
-	    host)  OBJTOP=$OBJROOT/$HOST_TARGET;;
+	    host32) OBJTOP=$HOST_OBJTOP32;;
+	    host)  OBJTOP=$HOST_OBJTOP;;
 	    esac
 	    :
 	}
 
-	add_hooks sb_init_hooks sb_project
+results in ``mk`` calling ``mk_target_machine_xtra``
+from ``mk_target_machine`` via ``mk_target_machine_hooks``.
 
-	# canonicalize SB_PROJECT
-	sb_project() {
-	    _p=${1:-$SB_PROJECT}
+The last  ``:`` just ensures a  happy return code (``return  0`` would
+work too  - but is more  typing ;-), since by default ``run_hooks``
+stops if any hook returns non-zero.
 
-	    case "$_p" in
-	    netbsd*|NetBSD*)
-	        SB_PROJECT=NetBSD
-		# other setup....
-	        ;;
-	    esac
-	    :
-	}
+That break on non-zero behavior is handy when using ``run_hooks`` to
+allow customizing command line options, if a hook consumes an argument
+it returns non-zero and the search stops.
 
+The function ``source_rc`` sets ``source_dir`` to the directory in
+which a file is found which makes it easier to then source other
+files in the same or related directories.
 
-results in each app calling ``sb_project`` early
-and for ``mk`` calling ``mk_target_machine_xtra``
-from ``mk_target_machine``.
-
-The last ``:`` just ensures a happy return code (``return 0`` would
-work too), since by default ``run_hooks`` stops if any hook returns
-non-zero.
-This is handy when using ``run_hooks`` to allow customizing
-command line options, if a hook consumes an argument it returns non-zero
-and the search stops.
-
-After the global rc files have been read we run::
+After the global rc files have been read, we run::
 
 	sb_run_hooks begin
 
@@ -119,51 +218,194 @@ assuming ``${varMyname}`` and ``${varMYNAME}`` are different.
 These variables are derived from ``Myname`` and ``MYNAME`` in a
 manner to ensure they are valid shell variable names.
 
-Next ``mk`` searches upwards from the current directory for the file 
+Next, ``mk`` searches upwards from the current directory for the file 
 ``.sandbox-env``.
 If found, its location defines ``SB``.
-If not found ``mk`` will run ``mk_no_sb_hooks`` with the last entry
+If not found, ``mk`` will run ``mk_no_sb_hooks`` with the last entry
 being ``mk_no_sb`` which will throw an error.
 A prior function on that list could return non-zero.
-For example::
+For example in ``${SB_TOOLS}/sandbox.d/crufty.rc`` I have::
 
-	add_hooks mk_no_sb_hooks maybe_default_sb
-	maybe_default_sb() {
-	    case "$here" in
-	    /tmp|/var/tmp)
-	        export SB=$here
-	        export MAKESYSPATH=.../share/mk:.../mk:/usr/share/mk
-	        return 1
-	        ;;
-	    esac
-	    return 0
+	##
+	# default_sb $here
+	#
+	# set minimal env if not in a sandbox
+	# This saves having to remember to run 'make' rather than 'mk'.
+	#
+	# You can use:
+	#	add_hooks mk_no_sb_hooks --first your_hook
+	# if you want your_hook to get first look
+	#
+	add_hooks mk_no_sb_hooks default_sb
+	default_sb() {
+	    eval $_local sb
+	    sb=`find_it -d --dir src`
+	    export SB=${sb:-$here}
+	    # this is only meaningful to bmake
+	    export MAKESYSPATH=.../share/mk:.../mk:/usr/share/mk
+	    run_hooks default_sb_hooks
+	    return 1
 	}
 
-
-Once ``SB`` is known, it reads (if they exist)::
+Once ``SB`` is known, we call ``sb_hooks $SB`` which will
+set ``SB_BASE`` and ``SB_NAME`` to its dirname and basename.
+Then read (if they exist)::
 
 	$SB/../.sandboxrc
 	$SB/.sandboxrc
 
-We then run::
+Then run::
 
 	sb_run_hooks init
 
-and then read::
+and *finally* read (if it exists and we are not ``mksb`` - who will read it  after generating it)::
 
 	$SB/.sandbox-env
 
-After all the rc files have been read, we run more hook functions::
+By now we have ``$SB_PROJECT`` if it will be set, and if so, call
+``sb_project_init`` which will look in ``$SB_TOOLS`` as well as any
+dirs in ``$SB_RC_DIR_LIST`` for::
+
+	sb-project.d/
+	$MYNAME-project.d/
+
+in which we will look for for::
+
+	$SB_PROJECT.rc
+
+if ``$SB_PROJECT`` contains any period (``.``) or hyphen (``-``)
+characters or anything else listed in ``$SB_PROJECT_SEPARATOR_LIST``,
+we will truncate ``$SB_PROJECT`` at such and add the result
+to the list.
+Any upper case characters will result in adding the list so far, in
+lower case.
+
+For ``mksb``, ``SB_PROJECT`` may not yet have its canonical version.
+We may encode optional information in the initial value, so
+we use every member the list so far as a prefix (so
+``${SB_PROJECT}*.rc`` etc).
+
+For example; if ``SB_PROJECT`` is ``FreeBSD-doc`` we will look for::
+
+	FreeBSD-doc.rc
+	FreeBSD.rc
+	freebsd-doc.rc
+	freebsd.rc
+
+and if we are ``mksb``, we will also try::
+
+	FreeBSD-doc*.rc
+	FreeBSD*.rc
+	freebsd-doc*.rc
+	freebsd*.rc
+
+We use ``source_rc --once`` so that ``freebsd*.rc`` will not cause
+a file we already read, to be read again.
+
+The ``sb-rc-files.tgz`` below, includes ``mksb-project.d/freebsd.rc``.
+For other apps, ``SB_PROJECT`` should have its canonical value
+``FreeBSD``, but ``mksb`` gets it from the user, and ``freebsd`` is
+easier to type, and while it is easy to turn ``FreeBSD`` into
+``freebsd``, the reverse is not practical.
+
+Lastly, we call::
+
+	sb_run_hooks project_init
+	sb_run_hooks project
+
+which expands to::
+
+	run_hooks sb_project_init_hooks
+	run_hooks ${varMyname}_project_init_hooks
+	run_hooks ${varMYNAME}_project_init_hooks
+	run_hooks sb_project_hooks
+	run_hooks ${varMyname}_project_hooks
+	run_hooks ${varMYNAME}_project_hooks
+
+Note: if ``Myname`` is the same as ``MYNAME`` only one will be used.
+The goal is to allow us to only load and run functions relevant to
+``$SB_PROJECT``.
+
+For my FreeBSD sandboxes I have ``$HOME/sb-project.d/FreeBSD.rc``
+which among other things, tweaks the environment differently for the
+*traditional* targets (like ``buildworld``) vs. DIRDEPS_BUILD_ targets::
+
+	# some decisions depend on the command line
+	add_hooks mk_init_hooks cmdline_check
+	legacy_build=${LEGACY_BUILD:-false}
+	cmdline_check() {
+	    : curdir=$curdir
+	    case "$curdir" in
+	    */bmake) bmake_build_env;;
+	    $SB/src/release)
+	        legacy_build=true
+	        ;;
+	    $SB/src)
+	
+	        : sb_env_cmdline=$sb_env_cmdline
+	        case " $sb_env_cmdline " in
+		*after-import*) add_hooks mk_finish_hooks bmake_build_env;;
+	        *build[kwu]*|*install[kw]*|*release*|*makeman*)
+	            legacy_build=true
+	            # if we have bmake built in tree, use it
+	            # this makes it easier to test buildworld with new bmake
+	            host_bmake ${STAGE_HOST_OBJTOP:-$SB/obj/stage/$HOST_TARGET}/usr/bin/make $HOST_OBJTOP/usr.bin/bmake/make
+	            ;;
+	        esac
+	        ;;
+	    */ports*)
+	        legacy_build=true
+	        ;;
+	    esac
+	    if $legacy_build; then
+	        add_hooks mk_finish_hooks legacy_build_env
+	        add_hooks mk_target_machine_hooks legacy_target_machine
+	    else
+	        add_hooks mk_finish_hooks compiler_env
+	        add_hooks mk_target_machine_hooks set_arch
+	    fi
+	    return 0    
+	}
+	
+	legacy_target_machine() {
+	    case "$REQUESTED_TARGET_SPEC" in
+	    *,*)
+	        TARGET_SPEC_VARS="TARGET TARGET_ARCH"
+	
+	        export TARGET=${REQUESTED_TARGET_SPEC%%,*}
+	        export TARGET_ARCH=${REQUESTED_TARGET_SPEC##*,}
+	        export MACHINE_ARCH=$TARGET_ARCH
+	        ;;
+	    esac
+	    :
+	}
+	
+	# for legacy top-level targets like build{world,kernel} etc
+	legacy_build_env() {
+	
+	    echo Setting legacy build env...
+	    export WITHOUT_DIRDEPS_BUILD=1
+	    #export MAKEOBJDIRPREFIX=${MAKEOBJDIRPREFIX:-$SB/obj}
+	    export MAKE_OBJDIR_CHECK_WRITABLE=no
+	    unset MAKEOBJDIR OBJTOP
+	    unset CC CXX LD
+	    # legacy targets depend on this being set
+	    export MACHINE_ARCH=${MACHINE_ARCH:-$MACHINE}
+	        
+	    return 0
+	}
+
+After all the rc files have been read, we run *yet more* hook functions::
 
 	sb_run_hooks setup
 
 Some apps run others as well.
-For example ``mk`` runs ``mk_cmd_hooks``.
+For example, ``mk`` runs ``mk_cmd_hooks``.
 After any application specific hooks are run we do::
 
 	sb_run_hooks finish
 
-Finally ``mk`` runs adds ``mk_exec_make`` (which will exec
+Finally ``mk`` adds ``mk_exec_make`` (which will exec
 ``${REAL_MAKE:-make}``) to ``mk_run_hooks`` and runs::
 
 	sb_run_hooks run $MK_MAKEFLAGS "$@"
@@ -171,9 +413,9 @@ Finally ``mk`` runs adds ``mk_exec_make`` (which will exec
 If other functions are in ``mk_run_hooks`` they can exec, or exit
 to prevent ``mk_exec_make`` being called.
 
-'mk' provides 'mk_run_make' as an alternative to 'mk_exec_make'.
-Both will run 'mk_pre_run_hooks' before they exec/run make,
-but 'mk_run_make' will run 'mk_post_run_hooks' afterwards and then
+``mk`` provides ``mk_run_make`` as an alternative to ``mk_exec_make``.
+Both will run ``mk_pre_run_hooks`` before they exec/run make,
+but ``mk_run_make`` will run ``mk_post_run_hooks`` afterwards and then
 exit with the saved status from make.
 This allows for cases where it is desired to wrap the running of make
 by other operations.
@@ -182,7 +424,8 @@ options
 ~~~~~~~
 
 With the following exceptions, anything on the ``mk`` command line
-is expected to be consumed by ``$REAL_MAKE``.
+is expected to be consumed by ``make`` or whatever is run via
+``mk_run_hooks``.
 
 If any of these options are used, they *must* appear before anything else:
 
@@ -215,20 +458,21 @@ If any of these options are used, they *must* appear before anything else:
 	Calls ``mk_target_machine`` to set ``MACHINE`` to the value
 	provided.
 
-	If the tupple provided starts with a numeric it is used to set
-	``MAKELEVEL`` and the remainer used for ``MACHINE``, and if it
-	is also a tupple we set ``TARGET_SPEC`` to the full tupple
+	If the tuple provided starts with a numeric it is used to set
+	``MAKELEVEL`` and the remainder used for ``MACHINE``, and if it
+	is also a tuple we set ``TARGET_SPEC`` to the full tuple
 	while ``MACHINE`` is set to just the first element.
 
 	It also sets ``REQUESTED_MACHINE`` so that the build can tell
 	the difference between this case and a default value of ``MACHINE``.
 
-	The same result happens if ``mk`` is invoked as ``mk-$MACHINE``.
+	The same result happens if ``mk`` is invoked as ``mk-$MACHINE`` or
+	``mk-$TARGET_SPEC``.
 
 ``--make REQUESTED_MAKE``
 
 	Sometimes it is handy to override the ``REAL_MAKE`` that would
-	normaly be used.
+	normally be used.
 
 Note that the form ``--help=`` *topic* works as well:
 
@@ -236,21 +480,92 @@ mk-host
 ~~~~~~~
 
 If ``mk`` is invoked with a name like ``mk-*`` it behaves exactly as
-if run as ``mk --machine *``.  That is the part of its name after
+if run as ``mk --machine *``.  That is; the part of its name after
 ``mk-`` is treated as a ``TARGET_SPEC`` tuple.
 
-Thus ``mk-host`` is a convinient means of building things for the
+Thus ``mk-host`` is a convenient means of building things for the
 pseudo ``MACHINE`` ``host``, while ``mk-host32`` takes care of the
-32bit viriant.
+32bit variant, and ``mk-common`` for the pseudo ``MACHINE`` ``common``
+which can be useful in the case of code which is common to all
+architectures. 
 
 Similar links can be made for other commonly used ``TARGET_SPEC`` tuples.
 
+workon
+------
+
+This is an optional tool, though I find it very handy.
+::
+
+	$ workon NetBSD/current
+
+will find the sandbox called ``NetBSD/current`` (by searching via
+``$SB_BASE_PATH``) ``chdir`` into it, set the environment up (as per
+mk_) and run my shell.
+I can then make use of variables like ``$SB`` and others setup by
+``.sandbox-env`` et al, which is very convenient.
+
+I use screen(1) to have multiple windows on a build host each in a
+separate sandbox.
+To help keep track of things I have the following in
+``$HOME/workon.d/tty_tag.rc``::
+
+	: -*- mode: ksh -*-
+	
+	# I use TTY_TAG in my prompt and xterm title bar
+	add_hooks workon_finish_hooks tty_tag
+	tty_tag() {
+	    eval ${_local:-:} clue
+	    
+	    for clue in work $USER $TTY_TAG_CLUE_LIST
+	    do
+		: clue=$clue SB=$SB
+	        case "$SB" in
+		*/${clue}/*)
+	            if ${isPOSIX_SHELL:-false}; then
+	                TTY_TAG="[${SB#*${clue}/}]"
+		    else
+	                TTY_TAG="[`echo $SB | sed "s,.*/${clue}/,,"`]"
+		    fi
+	            break
+	            ;;
+		esac
+	    done
+	    TTY_TAG="${TTY_TAG:-[$SB_PROJECT-$SB_NAME]}"
+	    export TTY_TAG
+	}
+
+
+You can also use ``workon`` as a one command thing::
+
+	$ workon FreeBSD/current command [args]
+
+will do as above, but instead of running my shell, it will run
+``command`` and exit when it does.
+
+It also handles being invoked by names other than ``workon``::
+
+	# this is our default action at the very end
+	add_hooks workon_run_hooks workon_run
+	workon_run() {
+	    case $Myname in
+	    $MYNAME) ;;
+	    build) exec ${BUILD_CMD:-${MK_CMD:-${MK:-mk}}} "$@";;
+	    *)  CMDVAR=`echo $varMyname | toUpper`
+	        eval "CMD=\${${CMDVAR}_CMD:-\${$CMDVAR}}"
+	        test -z "$CMD" && error "do not know how to $Myname: '$CMDVAR[_CMD]' not set"
+	        exec $CMD "$@"
+	        ;;
+	    esac
+	    exec "${@:-${SHELL:-/bin/sh}}"
+	}
+	
 mksb
 ----
 
-The ``ev`` (``.sandbox-env``) file can be created manually of course,
-or it can be created by a tool; ``mksb`` which can also handle initial
-check-out of the source tree.
+The ``ev`` (``.sandbox-env``) file can easily be created manually of
+course, or it can be created by a tool; ``mksb`` which can also handle
+initial check-out of the source tree.
 
 Using ``mksb`` we can hide details like the SCM used by a given
 project, or the URL of the repository, etc.
@@ -274,7 +589,7 @@ functions to help populate ``.sandbox-env``:
 
 	Like ``expShellVars`` but adds ``VAR=${VAR:-value}; export VAR``
 
-``expShellLiteralVars VAR ...``
+``expShellVarsLiteral VAR ...``
 
 	Like ``expShellVars`` but uses single quotes.
 	This is useful for cases like:
@@ -313,224 +628,73 @@ and initialize ``.sandbox-env``, then::
 	run_hooks mksb_env_finish_hooks
 
 at this point ``.sandbox-env`` is generally complete and read
-by ``mksb``, then we run::
+by ``mksb``, then unless we had the ``--no-checkout`` option we run::
 
 	run_hooks mksb_checkout_init_hooks
 	run_hooks mksb_checkout_setup_hooks
 	run_hooks mksb_checkout_hooks
 	run_hooks mksb_checkout_finish_hooks
+
+and finally::
+
 	run_hooks mksb_finish_hooks
+	run_hooks mksb_exit_hooks
+
+The ``sb-rc-files.tgz`` referenced below, provides examples for
+the FreeBSD and NetBSD projects.
 
 options
 ~~~~~~~
 
-Because ``mksb`` is a much more complicated script than say ``mk``
+Because ``mksb`` is a much more complicated script than ``mk``
 it uses `eval_args.sh`_ to process its command line.
 
 Apart from supporting both long and short options, ``eval_args.sh``
 also handles ``VAR=VALUE`` assignments - with special handling if needed.
-	
-``--expShellVars=VAR[=value] --expShellDefVars=VAR[=value] --expShellLiteralVars=VAR[=value]``
+
+``--expShellVars=VAR[=value] --expShellDefVars=VAR[=value] --expShellVarsLiteral=VAR[=value]``
 
 	As described above for ``expShellVars`` etc.
 	If no *value* is provided, it is assumed to have been set
 	already on the command line.
 
-workon
-------
 
-This is also an optional tool, though I find it very handy.
-::
+Support scripts
+===============
 
-	$ workon NetBSD/current
+The tools above make use of many of the scripts below.
 
-will find the sandbox called ``NetBSD/current`` chdir into it,
-set the environment up (as per mk_) and run my shell.
-I can then make use of variables like ``$SB`` and others setup by
-``.sandbox-env``.
-
-I have ``mksb`` export the sandbox name in a variable that will be
-included in my shell prompt::
-
-	tty_tag() {
-        	# I use this in the xterm title bar (among other things)
-        	TTY_TAG="[\$SB_NAME]"
-        	expShellVars TTY_TAG
-	}
-
-	add_hooks mksb_env_finish_hooks tty_tag
-
-You can also use it as a one command thing::
-
-	$ workon FreeBSD/current command
-
-will do as above, but instead of running my shell, it will run
-``command`` and exit when it does.
-
-sb-opt.sh
+atexit.sh
 ---------
 
-This provides support for options like ``--sb-opt-KNOB={yes,no}``.
+A shell equivalent of atexit(3).
 
-It creates a file ``sbopt-KNOB.inc`` and arranges for
-``$SB/.sandboxrc`` to include it.
+It provides ``atexit`` to register commands to be executed when the
+script exits.
 
-If the arg is ``yes`` then ``sbopt-KNOB.inc`` will contain ``export
-WITH_KNOB=1`` and ``export WITHOUT_KNOB=1`` for ``no``.
+It also provides ``Exit`` which should be used to set ``ExitStatus``
+to ensure that the desired exit status survives the ``trap`` dance
+used to make this work.
 
-This works in conjunction with our ``options.mk`` or FreeBSD's
-``bsd.mkopt.mk`` to set ``MK_KNOB={yes,no}``
-
-``sb-opt.sh`` can be used at any time to update ``sbopt-*.inc``.
-For example::
-
-	sb-opt.sh AUTO_OBJ=yes DIRDEPS_BUILD=no
-
-results in::
-
-	(cd $SB && egrep 'WITH|sbopt' sbopt*inc .sandboxrc)
-	sbopt-AUTO_OBJ.inc:export WITH_AUTO_OBJ=1
-	sbopt-DIRDEPS_BUILD.inc:export WITHOUT_DIRDEPS_BUILD=1
-	.sandboxrc:. ${SB}/sbopt-AUTO_OBJ.inc
-	.sandboxrc:. ${SB}/sbopt-DIRDEPS_BUILD.inc
-
-Then::
-
-	sb-opt.sh DIRDEPS_BUILD=yes
-	(cd $SB && egrep 'WITH|sbopt' sbopt*inc .sandboxrc)
-	sbopt-AUTO_OBJ.inc:export WITH_AUTO_OBJ=1
-	sbopt-DIRDEPS_BUILD.inc:export WITH_DIRDEPS_BUILD=1
-	.sandboxrc:. ${SB}/sbopt-AUTO_OBJ.inc
-	.sandboxrc:. ${SB}/sbopt-DIRDEPS_BUILD.inc
-	
-
-mkopt.sh
+debug.sh
 --------
 
-This script is the equivalent of ``options.mk`` for shell scripts.
-It can be useful in the rc scripts used by ``mk`` et al.
+Provides a set of functions that allow for flexible tracing of
+shell scripts.
 
-The key api is::
+``DEBUG_SH`` can be set to a comma separated list of tokens that will
+be checked when a script calls ``DebugOn`` or ``DebugOff``.
 
-	_mk_opt {yes,no} OPT
+For example; if ``DEBUG_SH=sb_hooks,mk_find_sb`` then
+``sb_hooks`` will be traced since it calls ``DebugOn sb_hooks`` at the
+start and ``DebugOff sb_hooks`` at the end.  Similarly ``mk_find_sb``
+will be traced.
 
-It sets ``MK_OPT`` to ``yes`` or ``no`` (the first argument is the
-default value) using the same logic as ``options.mk``.
-
-A convenience api is::
-
-	_mk_opts {yes,no} OPT1 OPT2 OPT3/OPT2 ...
-
-where groups of options preceded by their default value can be
-repeated as many times as desired.  The ``OPT3/OPT2`` case means that
-the default value for ``MK_OPT3`` will be the value of ``MK_OPT2``.
-
-Another convenience api is::
-
-	_mk_cmdline_opts OPT ...
-
-looks at the command line, specifically any
-``-DWITH*`` or ``MK_*={yes,no}`` args and if they affect any of the
-listed options, evaluates them so that they
-can influence the result of ``_mk_opt``.
-If the argument is ``'*'`` then all options are handled.
-
-For example, if one of the rc scripts sourced by ``mk`` does::
-
-	$_MKOPT_SH . $SB_TOOLS/mkopt.sh
-	_mk_cmdline_opts CCACHE DISTCC 
-	_mk_opts no CCACHE DISTCC
-
-(``mkopt.sh`` will set ``_MKOPT_SH=:``, so the use of ``$_MKOPT_SH``
-is a simple guard against including it more than once)
-then the command::
-
-	mk -DWITH_DISTCC
-
-will cause not only ``MK_DISTCC=yes`` in the makefiles (assuming
-``options.mk`` or ``bsd.mkopt.mk`` is used), but in ``mk``
-itself too.
-
-
-hooks.sh
---------
-
-.. _`hook functions`:
-.. _`run_hooks`:
-
-The file ``hooks.sh`` provides an api for defining lists of hook functions
-and running them at appropriate times.
-
-``add_hooks list`` *function* [...]
-
-	Adds *function* to ``$list``
-
-``run_hooks list [LIFO]`` [*args*]
-
-	Run each of the functions in ``$list`` passing them any *args*.
-
-	Processing stops if a function returns !0
-
-	If the first arg is ``LIFO`` the list is run in reverse order.
-
-``run_hooks_all list [LIFO]`` [*args*]
-
-	As for ``run_hooks`` but all functions are run regardless of
-	return values.
-
-
-setopts.sh
-----------
-
-Simple and convenient option handling for shell scripts.
-It leverages the ``getopts`` builtin if available, but it adds several
-types of options.
-Given::
-
-	opt_str=s:a.b^cl,z=
-	opt_a=default
-	
-	. setopts.sh
-
-Then:
-
-``opt_s``
-
-	will be set to the argument of the last ``-s`` option.
-
-``opt_a``
-
-	will accumulate arguments of ``-a``, that is ``-a`` can be
-	repeated, the arugments will be separated by ``opt_dot`` (space).
-	If no ``-a`` options are present, the value will be that set
-	before the sourcing of ``setopts.sh``
-
-``opt_b``
-
-	Is a boolean it will be set to 0 or 1 depending on whether
-	``-b`` was seen.
-
-``opt_c``
-
-	Will be blank or set to ``-c`` it that option was seen.
-	This is convenient for passing options on to child processes.
-
-``opt_l``
-
-	Will accumulate and ``-l`` arguments, but these will be
-	separated by ``opt_comma`` (``,``)
-
-``opt_z``
-
-	Requires an argument of the form ``var=val``,
-	which will be evaluated if ``opt_assign_eval`` is set to
-	something other than ``no``.
-	
 eval_args.sh
 ------------
 
 This is a more complex option handling facility for shell scripts.
-It handles short options in a maner comaptible with `setopts.sh`_
+It handles short options in a manner compatible with `setopts.sh`_
 as well as long options using the same conventions.
 
 Given::
@@ -581,26 +745,252 @@ The default is ``$opt_unknown`` (``_unknown_opt``), a useful alternative
 is ``_copy_unknown_opt``.  A rather complex chain of option
 handlers can be constructed by using `hooks.sh`_.
 
+have.sh
+-------
+
+Tests whether we can trust the return code from the ``type`` builtin,
+and provides a function ``have`` which can be used to test if a
+command or function is available.
+
+hooks.sh
+--------
+
+.. _`hook functions`:
+.. _`run_hooks`:
+
+Provides an API for defining lists of hook functions
+and running them at appropriate times.
+
+``add_hooks list`` *function* [...]
+
+	Adds *function* to ``$list``
+
+``run_hooks list [LIFO]`` [*args*]
+
+	Run each of the functions in ``$list`` passing them any *args*.
+
+	Processing stops if a function returns !0
+
+	If the first arg is ``LIFO`` the list is run in reverse order.
+
+``run_hooks_all list [LIFO]`` [*args*]
+
+	As for ``run_hooks`` but all functions are run regardless of
+	return values.
+
+
+isposix-shell.sh
+----------------
+
+Tests whether we are using a POSIX shell so we can safely use some of
+its cool features when available.
+
+It sets ``$isPOSIX_SHELL`` which will be true or false.
+
+on-error.sh
+-----------
+
+Similar to `atexit.sh`_, provides ``on_error`` to register commands to
+execute when we call ``Error`` (also provided) to terminate the script.
+
+``Error`` sets ``ExitStatus`` to ensure compatibility with `atexit.sh`_.
+
+mkopt.sh
+--------
+
+This script is the equivalent of ``options.mk`` for shell scripts.
+It can be useful in the rc scripts used by ``mk`` et al.
+
+The key API is::
+
+	_mk_opt {yes,no} OPT
+
+It sets ``MK_OPT`` to ``yes`` or ``no`` (the first argument is the
+default value) using the same logic as ``options.mk``.
+
+A convenience API is::
+
+	_mk_opts {yes,no} OPT1 OPT2 OPT3/OPT2 ...
+
+where groups of options preceded by their default value can be
+repeated as many times as desired.  The ``OPT3/OPT2`` case means that
+the default value for ``MK_OPT3`` will be the value of ``MK_OPT2``.
+
+Another convenience API is::
+
+	_mk_cmdline_opts OPT ...
+
+looks at the command line, specifically any
+``-DWITH*``, ``WITH*=*`` or ``MK_*={yes,no}`` args and if they affect
+any of the listed options, evaluates them so that they
+can influence the result of ``_mk_opt``.
+If the argument is ``'*'`` then all options are handled.
+
+For example, if one of the rc scripts sourced by ``mk`` does::
+
+	$_MKOPT_SH . $SB_TOOLS/mkopt.sh
+	_mk_cmdline_opts CCACHE DISTCC 
+	_mk_opts no CCACHE DISTCC
+
+(``mkopt.sh`` will set ``_MKOPT_SH=:``, so the use of ``$_MKOPT_SH``
+is a simple guard against including it more than once)
+then the command::
+
+	mk -DWITH_DISTCC
+
+will cause not only ``MK_DISTCC=yes`` in the makefiles (assuming
+``options.mk`` or ``bsd.mkopt.mk`` is used), but in ``mk``
+itself too.
+
+
+sb-opt.sh
+---------
+
+This provides support for options like ``--sb-opt-KNOB={yes,no}``.
+
+This allows a sandbox to record the settings of knobs in a manner that
+allows them to be easily changed in the future.
+
+It creates a file ``sbopt-KNOB.inc`` and arranges for
+``$SB/.sandboxrc`` to include it.
+
+If the arg is ``yes`` then ``sbopt-KNOB.inc`` will contain ``export
+WITH_KNOB=1`` and ``export WITHOUT_KNOB=1`` for ``no``.
+
+This works in conjunction with our ``options.mk`` or FreeBSD's
+``bsd.mkopt.mk`` to set ``MK_KNOB={yes,no}``
+
+``sb-opt.sh`` can be used at any time to update ``sbopt-*.inc``.
+For example::
+
+	sb-opt.sh AUTO_OBJ=yes DIRDEPS_BUILD=no
+
+results in::
+
+	(cd $SB && egrep 'WITH|sbopt' sbopt*inc .sandboxrc)
+	sbopt-AUTO_OBJ.inc:export WITH_AUTO_OBJ=1
+	sbopt-DIRDEPS_BUILD.inc:export WITHOUT_DIRDEPS_BUILD=1
+	.sandboxrc:. ${SB}/sbopt-AUTO_OBJ.inc
+	.sandboxrc:. ${SB}/sbopt-DIRDEPS_BUILD.inc
+
+Then::
+
+	sb-opt.sh DIRDEPS_BUILD=yes
+	(cd $SB && egrep 'WITH|sbopt' sbopt*inc .sandboxrc)
+	sbopt-AUTO_OBJ.inc:export WITH_AUTO_OBJ=1
+	sbopt-DIRDEPS_BUILD.inc:export WITH_DIRDEPS_BUILD=1
+	.sandboxrc:. ${SB}/sbopt-AUTO_OBJ.inc
+	.sandboxrc:. ${SB}/sbopt-DIRDEPS_BUILD.inc
+	
+
+scm-funcs.sh
+------------
+
+Modern SCM's like GIT and Mercurial automatically paginate output from
+most (but not all) commands.  Others like CVS and to a large extent
+SVN do not.   This file provides wrapper functions to address that and
+paper over other failings like the lack of a ``revert`` command in
+CVS.
+
+It can be read into a shell or other script to provide these
+functions, or it can be linked to the name ``scm`` and thus provide a
+generic wrapper - so you don't have to remember which SCM a given
+directory uses.
+
+setopts.sh
+----------
+
+Simple and convenient option handling for shell scripts.
+It leverages the ``getopts`` builtin if available, but it adds several
+types of options.
+Given::
+
+	opt_str=s:a.b^cl,z=
+	opt_a=default
+	
+	. setopts.sh
+
+Then:
+
+``opt_s``
+
+	will be set to the argument of the last ``-s`` option.
+
+``opt_a``
+
+	will accumulate arguments of ``-a``, that is ``-a`` can be
+	repeated, the arguments will be separated by ``opt_dot`` (space).
+
+	If no ``-a`` options are present, the value will be that set
+	before the sourcing of ``setopts.sh``
+
+	If ``opt_dot_a`` is set, its value will be used instead of
+	``$opt_dot`` to separate entries.
+
+``opt_b``
+
+	Is a boolean it will be set to 0 or 1 depending on whether
+	``-b`` was seen.
+
+``opt_c``
+
+	Will be blank or set to ``-c`` if that option was seen.
+	This is convenient for passing options on to child processes.
+
+``opt_l``
+
+	Will accumulate any ``-l`` arguments, but these will be
+	separated by ``opt_comma`` (``,``)
+
+``opt_z``
+
+	Requires an argument of the form ``var=val``,
+	which will be evaluated if ``opt_assign_eval`` is set to
+	something other than ``no``.
+	
+test_opt.sh
+-----------
+
+Provides ``test_opt`` to set variables like ``test_*`` to represent
+options supported by the command ``test`` (by default),  which can
+then be used.  For example::
+
+	test_opt L -h
+
+will set ``test_L=-L`` if that works or ``test_L=-h`` otherwise.
+
+Scripts can then use ``test $test_L`` to check for symlinks.
+
+Similarly::
+
+	test_opt P '' . cd
+
+will set ``cd_P=-P`` if ``cd`` supports that option.
 
 Sandbox environment
 ===================
 
-There is only one variable that every sandbox has; ``SB`` which is set
-by tools like ``mk`` when they find the magic ``.sandbox-env`` marker.
+Every sandbox has ``SB`` which is set by tools like ``mk`` when they
+find the magic ``.sandbox-env`` marker.
+They also set ``SB_BASE`` and ``SB_NAME`` to the dirname and basename
+of ``$SB``.
 Everything else is totally up to you.
-Ok we also set ``SB_NAME`` to the basename of ``SB``.
+Though variables like ``SB_PROJECT``, ``SB_MAKE`` and ``SB_SCM`` are
+very handy.
 
 For projects that use bmake_, I typically have::
 
 	export SB_MAKE=bmake
-	export OBJROOT=$SB/obj/
+	export SB_OBJROOT=$SB/obj/
 	export SRCTOP=$SB/src
+	export OBJROOT=$SB_OBJROOT
 	export OBJTOP='${OBJROOT}${MACHINE}'
 	export MAKEOBJDIR='${.CURDIR:S,${SRCTOP},${OBJTOP},}'
 	export MAKESYSPATH=$SRCTOP/share/mk
 
 Note that ``OBJTOP`` and ``MAKEOBJDIR`` are single quoted so that 
 they are seen like that by ``bmake``.
+Recent FreeBSD uses a similar default for ``MAKEOBJDIR``.
 
 This allows us to ensure that each build uses the correct
 ``share/mk/*.mk`` files and we get nice neat object dirs outside of
@@ -608,7 +998,7 @@ the src tree without the ugliness that ``MAKEOBJDIRPREFIX`` results
 in.
 
 Such a setup even works well when shared via NFS.
-Though in that case we might make ``SB_OBJROOT`` point to a local
+Though in that case we might make ``${SB}/obj`` point to a local
 filesystem for better performance.
 
 For a project that used ``gmake`` I might have::
@@ -622,22 +1012,31 @@ assuming it used my https://www.crufty.net/ftp/pub/sjg/gmk.tar.gz
 (see `gmake-dirdeps`_)
 
 The variable ``SB_MAKE`` describes the *flavor* of make to be used
-(default is ``make``), and in the above example we will use
-``REAL_MAKE=${GMAKE:-gmake}`` by default.
+(default is ``make`` which isn't especially useful ;-), and in the
+above example we will use ``REAL_MAKE=${GMAKE:-gmake}`` by default.
 
 Adding a project: hg-bmake
 ==========================
 
 Below is an example of adding a project for mksb_
 
-The official bmake_ sources are still in CVS, but I also keep
-a set of mercurial repositories for experimenting and tracking local
-changes (eg for FreeBSD).
+This generally means checking out a tree from a repository, how to do
+that depends on the SCM (``SB_SCM`` which might be ``git``, ``hg``,
+``svn`` etc).
+
+The other main task from mksb_'s perspective is to configure the
+various knobs that the project needs, which depend on the build
+tool used (``SB_MAKE`` which might be ``bmake`` or ``gmake`` or
+something else entirely).
+
+The official bmake_ sources are still in CVS, (same as NetBSD) but I
+also keep a set of mercurial (``hg``) repositories for experimenting and
+tracking local changes (eg for FreeBSD).
 
 The README.txt file in the top-level repository informs us:
 
 This tree is for simplifying the testing of new bmake versions
-for freebsd and other local variants.
+for FreeBSD and other local variants.
 
 It also provides for ease of experimentation.
 
@@ -645,25 +1044,58 @@ Repositories
 ------------
 
 There are actually three hg repositories.
-A top level one that provides ``Makefile.inc`` and the scripts
-``hgmerge.sh`` and ``build.sh`` to simplify the workflow.
 
-There are two more hg repositories below this one.
+top
+~~~
+
+The top level repository provides ``Makefile``, ``Makefile.inc`` and the
+scripts below to simplify the workflow.
+The scripts are run in the bmake directory of each
+sub-repository by the ``build`` and ``update`` targets in ``Makefile``.
+
+``hgmerge.sh``
+
+	This script will save any diff it finds before reverting
+	and merging any changes, so experiments in progress are not
+	lost.
+
+	Any such patch is simply noted - not restored as usually the
+	incomming changes are the result of such an experiment having
+	been committed upstream.
+
+	If no merging is needed a simple update is performed.
+
+``build.sh``
+
+	This script will build bmake, run its test suite and if
+	all tests pass, install the result.  The install step can be
+	skipped.
+	
+The top level ``Makefile`` uses dirdeps_ to coordinate activity.
+When ``VERSION`` is set, it will set ``DIRDEPS=crufty`` only,
+otherwise ``DIRDEPS`` will be set to each of the sub-repos.
+
+There are two more ``hg`` repositories below this one.
+Each one other than ``crufty`` has a ``Makefile.depend`` that sets
+``DIRDEPS=crufty`` to ensure that is done first.
 
 crufty
 ~~~~~~
 
 This represents the raw bmake distributions.
+This is what I build on Darwin, NetBSD and others that have no local
+changes.
+
 For each new version of bmake we simply::
 
 	cd crufty
 	mk VERSION=$version
 
-and the Makefile will unpack the tarball,
-take care of adding/deleting files as needed and prompt us
-to commit the result::
+and the makefile there will unpack the tarball, take care of
+adding/deleting files as needed and prompt us to commit the result::
 
 	hg commit -m"bmake-$version"
+
 
 freebsd
 ~~~~~~~
@@ -672,6 +1104,13 @@ This repository is cloned from crufty_ and tracks FreeBSD local
 changes.  There are not many but they are important.
 This repo allows us to easily test bmake changes prior to importing into
 FreeBSD.
+
+This is important, as I try to automate the actual import of bmake
+into FreeBSD to the extent possible (to reduce blunders).
+
+I will build a candidate bmake in this repo first - noting any
+conflicts with the local changes, and use it to build the FreeBSD tree
+to be sure there are no surprises later.
 
 The workflow is simple::
 
@@ -702,15 +1141,18 @@ hg-bmake.rc
 -----------
 
 This file can be included by ``.sandboxrc``, put in
-``$SB_TOOLS/mksb.d/hg-bmake.rc`` or just passed to ``mksb``
+``$SB_TOOLS/mksb.d/hg-bmake.rc``, or
+``$SB_TOOLS/mksb-project.d/hg-bmake.rc``, or
+or just passed to ``mksb``
 using ``--rc=$HOME/hg-bmake.rc``
 
 As noted above you can also do::
 
-	source_rc $HOME/mksb.d/*.rc
+	source_rc $HOME/${MYNAME}.d/*.rc
 
-in ``$HOME/.sandboxrc`` which is what I do, so simply
-puting ``hg-bmake.rc`` in ``$HOME/mksb.d/`` is all that is needed.
+in ``$HOME/.sandboxrc`` which is what I do, so simply putting
+``hg-bmake.rc`` in ``$HOME/mksb.d/`` or ``$HOME/mksb-project.d/`` is
+all that is needed.
 
 ``hg-bmake.rc`` contains a few functions which are added to hook lists.
 The first is ``hg_bmake_doc``::
@@ -783,7 +1225,7 @@ The variables like ``*OBJTOP`` and ``MAKEOBJDIR`` are exported to
 If ``mksb`` did not already do so, we would need to call
 ``expShellVarsLiteral`` with a list of variables to be exported as
 literals.  Actually ``mksb`` does not itself touch ``OBJTOP`` but a
-function in ``mksb.rc`` does::
+function in my ``mksb.d/crufty.rc`` does::
 
 	add_hooks mksb_env_finish_hooks mksb_env_finish
 	mksb_env_finish() {
@@ -798,8 +1240,7 @@ easier on various test machines to just::
 
 	mksb -n bmake -p hg-bmake
 	workon bmake
-	cd crufty/bmake
-	build.sh
+	mk
 
 and of course it provides a useful example.
 
@@ -819,9 +1260,9 @@ We also add ``hg_bmake_env`` to ``mksb_env_finish_hooks``::
 	}
 
 which just sets some knobs so we get automatic objdir creation and run
-bmake in meta mode.
+`bmake in meta mode`_.
 
-As noted the action happens in ``hg_bmake_clone``::
+As noted, the action happens in ``hg_bmake_clone``::
 
 	hg_bmake_clone() {
 	    HG=${HG:-hg}
@@ -870,11 +1311,22 @@ can be found at:
 
 https://www.crufty.net/ftp/pub/sjg/sb-tools.tar.gz
 
+Many of the generic ``.rc`` files referred to above, can be found in:
+
+https://www.crufty.net/ftp/pub/sjg/sb-rc-files.tar.gz
+
+The latest version of this document, can be found at:
+
+https://www.crufty.net/sjg/docs/sb-tools.htm
+
 ------
 
 .. _bmake: /help/sjg/bmake.htm
+.. _`bmake in meta mode`: /help/sjg/bmake-meta-mode.htm
+.. _dirdeps: dirdeps.htm
 .. _`gmake-dirdeps`: gmake-dirdeps.htm
+.. _DIRDEPS_BUILD: freebsd-meta-mode.htm
 
 :Author: sjg@crufty.net
-:Revision: $Id: sb-tools.txt,v 3b33e7340374 2023-05-18 22:55:37Z sjg $
+:Revision: $Id: sb-tools.txt,v 19c90ef98269 2026-01-25 00:55:50Z sjg $
 :Copyright: Crufty.NET

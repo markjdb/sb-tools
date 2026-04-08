@@ -3,61 +3,83 @@
 #	hooks.sh - provide hooks for customization
 #
 # SYNOPSIS:
-#	hooks_add_all HOOKS func [...]
-#	hooks_add_once HOOKS func [...]
+#	hooks_add_all HOOKS [--first] func [...]
+#	hooks_add_once HOOKS [--first] func [...]
 #	hooks_add_default_set {all,once}
 #	hooks_add HOOKS func [...]
+#	hooks_get [--lifo] HOOKS
 #	hooks_run [--lifo] HOOKS ["args"]
 #	hooks_run_all [--lifo] HOOKS ["args"]
 #	hooks_has HOOKS func
 #
-#	add_hooks HOOKS func [...]
+#	add_hooks HOOKS [--first] func [...]
 #	run_hooks HOOKS [LIFO] ["args"]
 #	run_hooks_all HOOKS [LIFO] ["args"]
 #
+#	add_list LIST [options] item [...]
+#	add_list_once LIST [options] item [...]
+#
 # DESCRIPTION:
 #	The functions add_hooks and run_hooks are retained for
-#	backwards compatability.  They are aliases for hooks_add_all and
+#	backwards compatibility.  They are aliases for hooks_add and
 #	hooks_run.
-#	
+#
 #	hooks_add_all simply adds the "func"s to the list "HOOKS".
+#
+#	If the first arg is '--first' "func"s are added to the start
+#	of the list.
+#
 #	hooks_add_once does the same but only if "func" is not in "HOOKS".
 #	hooks_add uses one of the above based on "option", '--all' (default)
 #	or '--once'.
+#
 #	hooks_add_default_set sets the default behavior of hooks_add
-#	hooks_has indicates whether "func" in in "HOOKS"
+#
+#	hooks_get simply returns the named list of functions.
+#
+#	hooks_has indicates whether "func" in in "HOOKS".
+#
 #	hooks_run runs each "func" in $HOOKS and stops if any of them
 #	return a bad status.
+#
 #	hooks_run_all does the same but does not stop on error.
-#	If run_hooks or run_hooks_all is given a 2nd argument of LIFO
-#	the hooks are run in the reverse order of calls to add_hooks.
+#
+#	If run_hooks or run_hooks_all is given a flag of '--lifo' or
+#	2nd argument of LIFO the hooks are run in the reverse order of
+#	calls to hooks_add.
 #	Any "args" specified are passed to each hook function.
+#
+#	add_list is just another alias for hooks_add, same for
+#	add_list_once.
+#
 
 # RCSid:
-#	$Id: hooks.sh,v 1.15 2023/05/06 16:36:32 sjg Exp $
+#	$Id: hooks.sh,v 1.27 2025/12/15 02:56:24 sjg Exp $
 #
-#	@(#)Copyright (c) 2000-2022 Simon J. Gerraty
+#	@(#)Copyright (c) 2000-2025 Simon J. Gerraty
 #
-#	This file is provided in the hope that it will
-#	be of use.  There is absolutely NO WARRANTY.
-#	Permission to copy, redistribute or otherwise
-#	use this file is hereby granted provided that 
-#	the above copyright notice and this notice are
-#	left intact. 
+#	SPDX-License-Identifier: BSD-2-Clause
+#      
+#	Please send copies of changes and bug-fixes to:
+#	sjg@crufty.net
+#
 
 # avoid multiple inclusion
 _HOOKS_SH=:
 
-# We want to use local if we can
-# if isposix-shell.sh has been sourced isPOSIX_SHELL will be set
-case "$isPOSIX_SHELL" in
-"") if (echo ${PATH%:*}) > /dev/null 2>&1; then
-        local=local
-    else
-        local=:
-    fi
-    ;;
-esac
+# does local *actually* work?
+local_works() {
+    local _fu
+}
+
+if local_works > /dev/null 2>&1; then
+    _local=local
+else
+    _local=:
+fi
+# for backwards compatability
+local=$_local
+
 
 ##
 # hooks_add_all list func ...
@@ -65,9 +87,15 @@ esac
 # add "func"s to "list" regardless
 #
 hooks_add_all() {
-    eval $local __h
+    eval $_local __h
     __h=$1; shift
-    eval "$__h=\"\$$__h $*\""
+    case "$1" in
+    --first)
+        shift
+        eval "$__h=\"$* \$$__h\""
+        ;;
+    *)  eval "$__h=\"\$$__h $*\"";;
+    esac
 }
 
 ##
@@ -76,14 +104,19 @@ hooks_add_all() {
 # add "func"s to "list" if not already there
 #
 hooks_add_once() {
-    eval $local __h __hh
+    eval $_local __h __hh __first
     __h=$1; shift
+    case "$1" in
+    --first) shift; __first=:;;
+    *) __first=;;
+    esac
     eval "__hh=\$$__h"
     while [ $# -gt 0 ]
     do
         : __hh="$__hh" 1="$1"
-        case " $__hh " in
+        case "$__first $__hh " in
         *" $1 "*) ;;    # dupe
+        :*) __hh="$1 $__hh";;
         *) __hh="$__hh $1";;
         esac
         shift
@@ -113,10 +146,34 @@ hooks_add_default_set() {
 #
 hooks_add() {
     case "$1" in
-    --all) shift; hooks_add_all "@";;
+    --all) shift; hooks_add_all "$@";;
     --once) shift; hooks_add_once "$@";;
     *) hooks_add_${HOOKS_ADD_DEFAULT:-all} "$@";;
     esac
+}
+
+##
+# hooks_get [--lifo] list [LIFO]
+#
+# return $list
+#
+hooks_get() {
+    eval $_local __h __h2 e __l
+    case "$1" in
+    --lifo) __l=LIFO; shift;;
+    esac
+    eval "__h=\$$1"
+    case "$__l$2" in
+    LIFO*)
+        __h2="$__h"
+        __h=
+        for e in $__h2
+        do
+            __h="$e $__h"
+        done
+        ;;
+    esac
+    echo "$__h"
 }
 
 ##
@@ -125,7 +182,7 @@ hooks_add() {
 # is func in $list ?
 #
 hooks_has() {
-    eval $local __h
+    eval $_local __h
     eval "__h=\$$1"
     case " $__h " in
     *" $1 "*) return 0;;
@@ -140,7 +197,7 @@ hooks_has() {
 # Without '--all'; if any return non-zero return that immediately
 #
 hooks_run() {
-    eval $local __a e __h __h2 __l
+    eval $_local __a e __h __hl __h2 __l
     __a=return
     __l=
 
@@ -148,23 +205,15 @@ hooks_run() {
     do
         case "$1" in
         --all) __a=:; shift;;
-        --lifo) __l=:; shift;;
+        --lifo) __l=$1; shift;;
         *) break;;
         esac
     done
-    eval "__h=\$$1"
-    shift
+    __hl=$1; shift
     case "$1" in
-    LIFO) __l=:; shift;;
+    LIFO) __l=--lifo; shift;;
     esac
-    if [ x$__l != x ]; then
-        __h2="$__h"
-        __h=
-        for e in $__h2
-        do
-            __h="$e $__h"
-        done
-    fi
+    __h=`hooks_get $__l $__hl`
     for e in $__h
     do
         $e "$@" || $__a $?
@@ -184,7 +233,7 @@ hooks_run_all() {
 # add_hooks,run_hooks[_all] aliases
 #
 add_hooks() {
-    hooks_add_all "$@"
+    hooks_add "$@"
 }
 
 run_hooks() {
@@ -195,22 +244,40 @@ run_hooks_all() {
     hooks_run --all "$@"
 }
 
+# hook lists are just lists
+add_list() {
+    hooks_add "$@"
+}
+
+add_list_once() {
+    hooks_add_once "$@"
+}
 
 case /$0 in
 */hooks.sh)
     # simple unit-test
-    list=
+    list=HOOKS
+    flags=
+    while :
+    do
+        : 1=$1
+        case "$1" in
+        HOOKS|*hooks) list=$1; shift;;
+        --*) flags="$flags $1"; shift;;
+        *) break;;
+        esac
+    done
     for f in "$@"
     do
+        : f=$f
         case "$f" in
-        --*|LIFO) ;;
-        *HOOKS|*hooks) list=$f;;
+        LIFO) ;;
         false|true) ;;
         *) eval "$f() { echo This is $f; }";;
         esac
     done
-    echo hooks_add "$@"
-    hooks_add "$@"
+    echo hooks_add $flags $list "$@"
+    hooks_add $flags $list "$@"
     echo hooks_run $list
     hooks_run $list
     echo hooks_run --all --lifo $list

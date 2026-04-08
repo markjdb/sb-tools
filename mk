@@ -49,6 +49,13 @@
 #		followed by any block comments marked by '##[*=~-]'.
 #		It then runs docs_hooks and exits.
 #
+#	--export "var"[="value"]
+#		Export "var"
+#
+#		Sometimes we want to add something to the environment
+#		after 'mk' has potentially cleaned it, as we do not
+#		want make(1) to treat it as a command line override.
+#
 #	--help ["topic"]
 #	
 #		Call the function '__help', the default version with
@@ -134,12 +141,22 @@
 #
 #
 # FILES:
+#	${SB_TOOLS}/sandbox.rc	site global setup
+#	${SB_TOOLS}/sandbox.d/*.rc	site global setup
 #	${SB_TOOLS}/sb-env.rc	site global setup
+#	${SB_TOOLS}/sb-env.d/*.rc	site global setup
 #	${SB_TOOLS}/${MYNAME}.rc	per app setup
+#	${SB_TOOLS}/${MYNAME}.d/*.rc	per app setup
 #	${HOME}/.sandboxrc	user global setup
+#	${HOME}/sandbox.d/*.rc	user global setup
+#	${HOME}/${MYNAME}.d/*.rc user per app setup
 #	${SB}/../.sandboxrc	sb group setup
 #	${SB}/.sandboxrc	extra setup in $SB
 #	${SB}/.sandbox-env	sb setup in $SB see mksb(1)
+#	${SB_TOOLS}/sb-project.d/$SB_PROJECT.rc	per project setup
+#	${SB_TOOLS}/${MYNAME}-project.d/$SB_PROJECT.rc
+#	${HOME}/sb-project.d/$SB_PROJECT.rc
+#	${HOME}/${MYNAME}-project.d/$SB_PROJECT.rc
 #
 # SEE ALSO:
 #	mksb(1), workon(1)
@@ -149,16 +166,11 @@
 #
 
 # RCSid:
-#	$Id: mk,v 1.70 2023/05/18 22:48:15 sjg Exp $
+#	$Id: mk,v 1.85 2025/12/16 22:26:42 sjg Exp $
 #
-#	@(#) Copyright (c) 2009-2022 Simon J. Gerraty
+#	@(#) Copyright (c) 2009-2025 Simon J. Gerraty
 #
-#	This file is provided in the hope that it will
-#	be of use.  There is absolutely NO WARRANTY.
-#	Permission to copy, redistribute or otherwise
-#	use this file is hereby granted provided that 
-#	the above copyright notice and this notice are
-#	left intact. 
+#	SPDX-License-Identifier: BSD-2-Clause
 #      
 #	Please send copies of changes and bug-fixes to:
 #	sjg@crufty.net
@@ -198,18 +210,30 @@ read_link() {
     fi
 }
 
+# close enough for now
+_absdir() {
+    case "$1" in
+    /*) echo $1;;
+    .) 'pwd';;
+    *) 'cd' $1 && 'pwd';;
+    esac
+}
+
 case "$MYNAME" in
-mk) unset ENV
+mk) unset BASH_ENV ENV
     # it is possible that $0 is a symlink
     me=`read_link $0`
     # we actually want to know where $me is
     case "$me" in
-    */*) SB_TOOLS=${SB_TOOLS:-`dirname $me`};;
+    */*) SB_TOOLS=${SB_TOOLS:-`dirname $me`}
+        SB_TOOLS=`_absdir $SB_TOOLS`
+        ;;
     esac
     ;;
 esac
 
 Mydir=${Mydir:-`dirname $0`}
+Mydir=`_absdir $Mydir`
 
 SB_TOOLS=${SB_TOOLS:-$Mydir}
 . $SB_TOOLS/sb-funcs.sh
@@ -297,7 +321,8 @@ mk_find_sb() {
         run_hooks mk_no_sb_hooks $here
         ;;
     esac
-    sb_hooks $sb
+    # a mk_no_sb_hooks hook may have set SB rather than sb
+    sb_hooks ${sb:-${SB:-$here}}
     'cd' "$here"
     DebugOff mk_find_sb
 }
@@ -334,6 +359,24 @@ mk_run_make() {
     Exit $rc
 }
 
+# sometimes we we want 'mk' to put something into the environment
+# after we have potentially cleaned it, but without passing it
+# to make(1) as a command line override
+mk__export() {
+    case "$1" in
+    "") ;;
+    *=*)
+        if $isPOSIX_SHELL; then
+            eval "export $1"
+        else
+            eval "$1"
+            export `IFS="="; set -- $1; echo $1`
+        fi
+        ;;
+    *)  export $1;;
+    esac
+}
+
 DebugOn sb_begin
 
 # We may want to examine the command line in a customization hook,
@@ -343,13 +386,36 @@ sb_cmd_args="$@"
 
 curdir=`$pwd`			# so we don't forget
 # global setup
+source_rc $SB_TOOLS/sandbox.rc
+source_rc $SB_TOOLS/sandbox.d/*.rc
 source_rc $SB_TOOLS/sb-env.rc
 source_rc $SB_TOOLS/sb-env.d/*.rc
 # per app setup
 source_rc $SB_TOOLS/${MYNAME}.rc
 source_rc $SB_TOOLS/${MYNAME}.d/*.rc
+
 # now let them set the hooks they want
-source_rc ${SB_RCFILES:-$HOME/$rc}
+_mk_opt yes SB_USER_RC
+if [ $MK_SB_USER_RC = yes ]; then
+    add_list_once SB_RC_DIR_LIST $HOME
+fi
+
+# for each dir in $SB_RC_DIR_LIST
+# look for $dir/$rc $dir/sandbox.d/*.rc and $dir/${MYNAME}.d/*.rc
+# Note: we recurse if anyone adds to SB_RC_DIR_LIST!
+_source_rc_dir_list() {
+    eval $_local dir _sb_rc_dir_list
+    _sb_rc_dir_list="$SB_RC_DIR_LIST"
+    for dir in $SB_RC_DIR_LIST
+    do
+        source_rc --once $dir/$rc $dir/sandbox.d/*.rc $dir/${MYNAME}.d/*.rc
+    done
+    if [ "$SB_RC_DIR_LIST" != "$_sb_rc_dir_list" ]; then
+        # someone added to the list!
+        _source_rc_dir_list
+    fi
+}
+_source_rc_dir_list
 
 # run these before doing *anything*
 sb_run_hooks begin
@@ -376,6 +442,7 @@ mk) mk_find_sb
         --) shift; break;;          # stop trying to interpret anything
         --doc) __doc;;              # does not return
         --docs) __docs;;            # does not return
+        --export) mk__export "$2"; shift 2;;
         --help) __help $2;;	    # does not return
         --machine) mk_target_machine $2; shift 2;;
         --make) REQUESTED_MAKE=$2; shift 2;;
@@ -396,7 +463,7 @@ mk) mk_find_sb
             run_hooks mk_option_hooks "$1" && break
             shift               # it was consumed
             ;;
-        *) break;;
+        *)  break;;
         esac
     done
     # set default if needed
@@ -410,5 +477,5 @@ mk) mk_find_sb
     add_hooks mk_run_hooks mk_exec_make
     sb_run_hooks run $MK_MAKEFLAGS "$@"
     ;;
-*) $SKIP_FIND_SB mk_find_sb;;
+*)  $SKIP_FIND_SB mk_find_sb;;
 esac
