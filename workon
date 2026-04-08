@@ -26,16 +26,11 @@
 #
 
 # RCSid:
-#	$Id: workon,v 1.15 2022/03/26 23:41:04 sjg Exp $
+#	$Id: workon,v 1.20 2026/01/14 06:18:37 sjg Exp $
 #
 #	@(#) Copyright (c) 2009-2020 Simon J. Gerraty
 #
-#	This file is provided in the hope that it will
-#	be of use.  There is absolutely NO WARRANTY.
-#	Permission to copy, redistribute or otherwise
-#	use this file is hereby granted provided that 
-#	the above copyright notice and this notice are
-#	left intact. 
+#	SPDX-License-Identifier: BSD-2-Clause
 #      
 #	Please send copies of changes and bug-fixes to:
 #	sjg@crufty.net
@@ -64,11 +59,12 @@ case "$name" in
 .) name=;;
 esac
 
-for b in "" . `IFS=:; echo $SB_BASE_PATH`
+# SB_BASE_PATH is a colon separated list of places
+# to look for sandboxes
+for b in "" . $SB_BASE `IFS=:; echo $SB_BASE_PATH`
 do
     sb=`find_sb ${b:+$b/}$name`
     test -d ${sb:-/dev/null} || continue
-    unset SB_BASE
     sb_hooks $sb
     SRCTOP="${SRCTOP:-${SB_SRC:-$SB/src}}"
     test -d "$SRCTOP" && 'cd' "$SRCTOP"
@@ -84,7 +80,7 @@ workon_run() {
     case $Myname in
     $MYNAME) ;;
     build) exec ${BUILD_CMD:-${MK_CMD:-${MK:-mk}}} "$@";;
-    *) CMDVAR=`echo $varMyname | toUpper`
+    *)  CMDVAR=`echo $varMyname | toUpper`
         eval "CMD=\${${CMDVAR}_CMD:-\${$CMDVAR}}"
         test -z "$CMD" && error "do not know how to $Myname: '$CMDVAR[_CMD]' not set"
         exec $CMD "$@"

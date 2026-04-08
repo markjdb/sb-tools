@@ -1,15 +1,10 @@
 :
 # RCSid:
-#	$Id: test_opt.sh,v 1.3 2021/10/16 21:21:17 sjg Exp $
+#	$Id: test_opt.sh,v 1.5 2025/08/07 21:59:54 sjg Exp $
 #
-#	@(#) Copyright (c) 2009 Simon J. Gerraty
+#	@(#) Copyright (c) 2009-2024 Simon J. Gerraty
 #
-#	This file is provided in the hope that it will
-#	be of use.  There is absolutely NO WARRANTY.
-#	Permission to copy, redistribute or otherwise
-#	use this file is hereby granted provided that 
-#	the above copyright notice and this notice are
-#	left intact. 
+#	SPDX-License-Identifier: BSD-2-Clause
 #      
 #	Please send copies of changes and bug-fixes to:
 #	sjg@crufty.net
@@ -17,16 +12,28 @@
 
 _TEST_OPT_SH=:
 
+##
+# test_opt opt alternative target prefix
+#
 # shell's typically have test(1) as built-in
 # and not all support all options.
+# 
+# This function can actually test options for other built-ins
+# eg. test_opt P '' . cd
+# will set cd_P=-P if cd supports that
+#
+# test_opt L -h
+# will set test_L to -L or -h if -L isn't supported
+# 
 test_opt() {
     _o=$1
     _a=$2
     _t=${3:-/}
-    
-    case `(test -$_o $_t) 2>&1` in
-    *:*) eval test_$_o=$_a;;
-    *) eval test_$_o=-$_o;;
+    _p=${4:-test}
+
+    case `($_p -$_o $_t) 2>&1` in
+    *:*) eval ${_p}_$_o=$_a;;
+    *) eval ${_p}_$_o=-$_o;;
     esac
 }
 

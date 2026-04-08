@@ -1,0 +1,222 @@
+#!/bin/sh
+:
+# NAME:
+#	diff-sb - compare files accross sandboxes
+#
+# SYNOPSIS:
+#	diff-sb [-n][-b "base"][-o "diffopt"] "sb_name" ["sb_name" ...] "file" ...
+#	cp-sb [-n][-b "base"] "sb_name" ["sb_name" ...] "file" ...
+#
+# DESCRIPTION:
+#	For each "file" we perform the operation indicated by the
+#	script name (or '-c' "cmd") against the corresponding path in
+#	each of the  sandboxes "sb_name" which are found under "base"
+#	(unless "sb_name" is an absolute path)
+#	which defaults to the "WORKON_SB_BASE" for the current
+#	sandbox.
+#
+#	This command can be run from anywhere within a sandbox.  It
+#	will determine the relative path from the current directory to
+#	the top of the sandbox, and reflect that in the destination
+#	paths.
+#
+#	Options:
+#
+#	-b "base"
+#		Use "base" rather than $SB_BASE to find "sb_name"
+#
+#	-c "cmd"
+#		Use "cmd" rather than 'diff' or 'cp' (based on script
+#		name).
+#
+#	-f	force copy.
+#		For cp-sb; copy file even if it exists in destinaton,
+#		default is to only copy files that are missing.
+#
+#	-n	do nothing, just say what we would do.
+#
+#	-o "opt"
+#		Pass "opt" though to command.
+#
+#	-s "sb_name"
+#		This is only needed when an "sb_name" arg might be
+#		confused with a file to copy or diff.
+#
+#	-v	say what we will do
+#
+
+# RCSid:
+#	$Id: diff-sb 75679 2025-06-04 00:30:02Z sjg $
+#
+# SPDX-License-Identifier: BSD-2-Clause
+#
+# Copyright (c) 2000-2025, Juniper Networks, Inc.
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+# "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+# LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+# A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+# OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+# SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+# DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+# THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+# (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+#
+
+Myname=`basename $0 .sh`
+Mydir=`dirname $0`
+
+# MYNAME defaults to $Myname, but '-' is a problem.
+MYNAME=diff_sb
+
+opt_c=
+
+# make sure we know about the current sandbox
+if [ ! -d ${SB:-/dev/null} ]; then
+    for f in $Mydir/sb-env.sh $Mydir/mk
+    do
+        test -s $f || continue
+        . $f
+        break
+    done
+fi
+
+for d in $Mydir $HOME $SB/.. $SB
+do
+    for rc in $d/$Myname.rc $d/.${Myname}rc
+    do
+	test -s $rc && { . $rc; break; }
+    done
+done
+
+here=`${pwd:-pwd}`
+sub=`expr $here : "^${SB_SRC:-$SB/src}\(.*\)"`
+
+opt_R=
+opt_dot_S=';'			# append opt_S with ';' separator
+opt_str=b:c:no.S.s.v
+
+case $Myname in
+cp-sb|sync-sb) opt_str=${opt_str}f opt_c=_cp;;
+*) opt_str=${opt_str}R;;
+esac
+
+opt_b=${opt_b:-${WORKON_SB_BASE:-$SB_BASE}}
+. $Mydir/setopts.sh
+
+sbs="$opt_s"
+case $Myname in
+diff*)
+    case "$opt_R,$opt_c" in
+    ,*) ;;
+    *,diff) opt_c="diff -u";;
+    *) opt_c=_diff;;
+    esac
+    opt_c="${opt_c:-diff -u}"
+    ;;
+esac
+
+# more expensive but avoid case where only scm keywords differ
+_strip_kw() {
+    egrep -v '\$[A-Z][a-z][^ :]*[:\$]' $1
+}
+
+_cp() {
+    if [ -z "$opt_f" ]; then
+	test -s $2 && return
+    fi
+    cp -p $1 $2
+}
+
+_diff() {
+    b1=`expr $# - 1`
+    eval a=\$$b1 b=\$$#
+
+    if [ -s $a ]; then
+	cmp -s $a $b && return
+	ha=`_strip_kw $a | ${HASH:-md5}`
+	hb=`_strip_kw $b | ${HASH:-md5}`
+	test x$ha = x$hb && return
+	echo "Index: ${a#$SB_SRC/$sub/}"
+    else
+	echo "Index: ${a#$SB_SRC/$sub/}"
+	av=
+	for x in "$@"
+	do
+	    case "$x" in
+	    $a) x=/dev/null;;
+	    esac
+    	    av="$av $x"
+	done
+	set -- $av
+    fi
+    diff -u "$@" | sed "/^[+-][+-][+-]/s,$SB_SRC/$sub/,,"
+}
+
+# this allows us to cache the SB_SRC of the target sb's
+get_sb_src() {
+    case "$1" in
+    /*) sb=$1;;
+    *) sb=$opt_b/$1;;
+    esac
+    sbv=`echo sb$1 | sed 's,[^a-zA-Z0-9],_,g'`
+    eval "SB_SRC=\$${sbv}_src"
+    if [ -z "$SB_SRC" ]; then
+	if [ -s $sb/.sandbox-env ]; then
+	    SB_SRC=`SB=$sb . $sb/.sandbox-env; echo $SB_SRC`
+	fi
+	if [ -s $sb/src ]; then
+	    SB_SRC=${SB_SRC:-$sb/src}
+	fi
+	SB_SRC=${SB_SRC:-$sb}
+	eval "${sbv}_src=$SB_SRC"
+    fi
+    test -d $SB_SRC
+}
+
+for f in $*
+do
+	case "$f" in
+	$SB/*|[!/]*)
+		[ -d $f ] && continue
+		if [ ! -f $f ]; then
+			sbs="$sbs $f"
+			continue
+		fi
+		;;
+	/*)
+		if [ -d $f ]; then
+			sbs="$sbs $f"
+			continue
+		fi
+		;;
+	esac
+	for sb in $sbs
+	do
+		get_sb_src $sb || continue
+		case "$opt_S" in
+		"") s=$sub/$f;;
+		*) s=`echo $sub/$f | sed $opt_S`;;
+		esac
+		case "$opt_R" in
+		"") a=$f b=$SB_SRC/$s;;
+		*) a=$SB_SRC/$s b=$f;;
+		esac
+		test -z "$opt_n$opt_v" || echo $opt_c $opt_o $a $b
+		test -z "$opt_n" || continue
+		$opt_c $opt_o $a $b
+	done
+done
+

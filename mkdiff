@@ -16,6 +16,9 @@
 #
 #	Options:
 #
+#	-f "log"
+#		Allow override of MKDIFF_DATE_FMT when not using "token".
+#
 #	-q	suppress '?' lines
 #
 #	-N	show new files (CVS only)
@@ -27,16 +30,11 @@
 #	Simon J. Gerraty <sjg@crufty.net>
 
 # RCSid:
-#	$Id: mkdiff,v 1.5 2022/09/02 15:50:51 sjg Exp $
+#	$Id: mkdiff,v 1.12 2025/12/18 02:04:12 sjg Exp $
 #
-#	@(#) Copyright (c) 2020 Simon J. Gerraty
+#	@(#) Copyright (c) 2020-2025 Simon J. Gerraty
 #
-#	This file is provided in the hope that it will
-#	be of use.  There is absolutely NO WARRANTY.
-#	Permission to copy, redistribute or otherwise
-#	use this file is hereby granted provided that 
-#	the above copyright notice and this notice are
-#	left intact. 
+#	SPDX-License-Identifier: BSD-2-Clause
 #      
 #	Please send copies of changes and bug-fixes to:
 #	sjg@crufty.net
@@ -53,7 +51,7 @@ Mydir=`dirname $0`
 # eval_args will call this for unrecognized options
 opt_unknown=mkdiff_options
 # rc files can add to mkdiff_options_hooks 
-add_hooks mkdiff_options_hooks unknown_opt
+add_hooks mkdiff_options_hooks _unknown_opt
 mkdiff_options() {
     run_hooks mkdiff_options_hooks LIFO "$@"
 }
@@ -75,16 +73,17 @@ __help:f
 "
 
 # some scm diffs take -x flags
-opt_str=Nqx.
+opt_str=f:Nqx.
 
+# mk will set SB_TOOLS
 . $Mydir/mk
-. $Mydir/eval_args.sh
-. $Mydir/scm-funcs.sh
-. $Mydir/commit-funcs.sh
+. $SB_TOOLS/eval_args.sh
+. $SB_TOOLS/scm-funcs.sh
+. $SB_TOOLS/commit-funcs.sh
 
 
 if [ $# -eq 0 ]; then
-    log=`date "+$MKDIFF_DATE_FMT"`
+    log=${opt_f:-`date "+$MKDIFF_DATE_FMT"`}
     scm_diff > $log
     echo $log
     exit 0
@@ -114,12 +113,27 @@ filter_diff() {
     esac
 }
 
+add_hooks mkdiff_log_var_hooks validate_log_var
+validate_log_var() {
+    : var=$var,val=$val
+    case "$var,$val" in
+    PR,[1-9]*[0-9]) ;;
+    PR,*) PR= val=;;
+    esac
+    :
+}
+
 mkdir -p `dirname $cl_diff`
 if [ ! -s $cl_log ]; then
-    if [ -n "$PR" ]; then
-        MKDIFF_LOG_SEDS="-e s,%PR%,$PR, $MKDIFF_LOG_SEDS"
-    fi
-    MKDIFF_LOG_SEDS="$MKDIFF_LOG_SEDS -e \"s,%USER%,$USER,\""
+    for var in PR USER $MKDIFF_LOG_VAR_LIST
+    do
+        eval "val=\$$var"
+        # any of these hooks can set val=
+        # if it is not a valid/expected value for $var
+        run_hooks mkdiff_log_var_hooks
+        test -n "$val" || continue
+        MKDIFF_LOG_SEDS="$MKDIFF_LOG_SEDS -e 's,%${var}%,$val,'"
+    done
     run_hooks mkdiff_log_template_hooks
     mkdiff_log_template
 fi

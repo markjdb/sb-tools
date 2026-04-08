@@ -36,16 +36,11 @@
 #	Simon J. Gerraty <sjg@crufty.net>
 
 # RCSid:
-#	$Id: commit-sb,v 1.7 2022/08/17 20:56:45 sjg Exp $
+#	$Id: commit-sb,v 1.10 2025/12/18 02:04:12 sjg Exp $
 #
 #	@(#) Copyright (c) 2020 Simon J. Gerraty
 #
-#	This file is provided in the hope that it will
-#	be of use.  There is absolutely NO WARRANTY.
-#	Permission to copy, redistribute or otherwise
-#	use this file is hereby granted provided that 
-#	the above copyright notice and this notice are
-#	left intact. 
+#	SPDX-License-Identifier: BSD-2-Clause
 #      
 #	Please send copies of changes and bug-fixes to:
 #	sjg@crufty.net
@@ -77,15 +72,16 @@ __help:f
 
 opt_str=D:d:F:fi:L:nqS
 
+# mk will set SB_TOOLS
 . $Mydir/mk
 
 tf=${TMPDIR:-/tmp}/.csb$$
 opt_d=$CVSROOT
 opt_L=$tf.L
 
-. $Mydir/eval_args.sh
-. $Mydir/scm-funcs.sh
-. $Mydir/commit-funcs.sh
+. $SB_TOOLS/eval_args.sh
+. $SB_TOOLS/scm-funcs.sh
+. $SB_TOOLS/commit-funcs.sh
 
 SKIP=${opt_n:+return}
 SKIP=${SKIP:-:}
@@ -151,7 +147,7 @@ XargsDo() {
 scm_opts=
 op_flags=
 case "$SCM" in
-cvs) scm_opts="-d $opt_d";;
+cvs) scm_opts="${opt_d:+-d $opt_d}";;
 svn) op_flags=${opt_S:+-uv};;
 esac
 

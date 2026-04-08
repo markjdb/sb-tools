@@ -97,21 +97,34 @@
 #	This avoids having both ``WITH_FOO`` and ``WITHOUT_FOO``
 #	set at the same time.
 #
+#	If the default value for option ``FOO`` is known it can be
+#	expressed to ``sb-opt.sh`` and if the desired value is the
+#	same as the default, we will just clear ``$SB/sbopt-FOO.inc``.
+#	For example::
+#
+#		sb-opt.sh no FOO=no
+#
+#	or::
+#
+#		sb-opt.sh default=no FOO=no
+#
+#	are both setting ``FOO`` to its default value, so we just make
+#	``$SB/sbopt-FOO.inc`` and empty file.
 #
 # SEE ALSO:
 #	mk(1), mkopt.sh(1)
 
-# RCSid:
-#	$Id: sb-opt.sh,v 1.8 2024/01/10 04:30:59 sjg Exp $
-#	
-#	@(#)Copyright (c) 2017 Simon J. Gerraty
 #
-#	This file is provided in the hope that it will
-#	be of use.  There is absolutely NO WARRANTY.
-#	Permission to copy, redistribute or otherwise
-#	use this file is hereby granted provided that 
-#	the above copyright notice and this notice are
-#	left intact. 
+# RCSid:
+#	$Id: sb-opt.sh,v 1.14 2025/08/07 21:59:54 sjg Exp $
+#	
+#	@(#)Copyright (c) 2017-2025 Simon J. Gerraty
+#
+#	SPDX-License-Identifier: BSD-2-Clause
+#      
+#	Please send copies of changes and bug-fixes to:
+#	sjg@crufty.net
+#
 
 _SB_OPT_SH=:
 
@@ -150,26 +163,44 @@ show_opts() {
 }
 
 sb_opt() {
+    default=
+
     while :
     do
         case "$1" in
         "") break;;
         rm) rm_opt $2; shift 2;;
         show) show_opts; exit 0;;
+        default=*|no|yes)
+            v=${1#*=}
+            case "$v" in
+            [YyTt1]*) default=yes;;
+            *) default=no;;
+            esac
+            shift
+            ;;
         *=*)
             o=${1%=*}
             v=${1#*=}
             u=
             case "$v" in
-            [YyTt1]*) w=WITH_ u=WITHOUT_;;
-            [NnFf0]*) w=WITHOUT_;;
+            [YyTt1]*) u=WITHOUT_ v=yes w=WITH_;;
+            [NnFf0]*) v=no w=WITHOUT_;;
             *) Error "unknown: $1";;
             esac
             i=sbopt-$o.inc
-            if [ ! -s $SB/$i ]; then
+            if ! grep -q "{SB}/$i" $SB/.sandboxrc 2> /dev/null; then
                 echo ". \${SB}/$i" >> $SB/.sandboxrc
             fi
-            echo "export $w$o=1" > $SB/$i
+            case "$default,$v" in
+            no,no|yes,yes) # just empty $SB/$i
+                > $SB/$i
+                u=
+                ;;
+            *)
+                echo "export $w$o=1" > $SB/$i
+                ;;
+            esac
             # WITH_ has no effect if WITHOUT_
             # happens to be in the env.
             test -z "$u" || echo "unset $u$o" >> $SB/$i

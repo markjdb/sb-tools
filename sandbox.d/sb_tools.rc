@@ -1,0 +1,36 @@
+: -*- mode: ksh -*-
+
+# we should only need to run sb_tools_init once
+if [ -w $source_dir ]; then
+    sb_tools_init_cookie=$source_dir/.sb_tools_inited
+    if ! is_newer $sb_tools_init_cookie $source_dir/$source_file; then
+        add_hooks sb_begin_hooks sb_tools_init
+        $_SB_SYMLINK_SH . $SB_TOOLS/sb-symlink.sh
+    fi
+fi
+
+##
+# sb_tools_init
+#
+# setup symlinks and run sb_tools_init_hooks
+#
+sb_tools_init() {
+    touch $sb_tools_init_cookie
+    (cd $SB_TOOLS || exit 1
+    MK_SYMLINK_RELATIVE=no
+    make_symlink --check diff-sb cp-sb
+    make_symlink --check mk sb-env.sh
+    make_symlink --check os.sh host_target
+    make_symlink --check os.sh host_target32
+    make_symlink --check scm-funcs.sh scm
+    for m in \
+        common \
+        host \
+        host32 \
+
+    do
+        make_symlink --check mk mk-$m
+    done
+    )
+    run_hooks sb_tools_init_hooks
+}
