@@ -1,16 +1,11 @@
 : -*- mode: ksh -*-
 
 # RCSid:
-#	$Id: help-funcs.sh,v 1.15 2022/08/18 04:29:19 sjg Exp $
+#	$Id: help-funcs.sh,v 1.19 2025/12/13 00:05:21 sjg Exp $
 #
-#	@(#) Copyright (c) 2009-2022 Simon J. Gerraty
+#	@(#) Copyright (c) 2009-2025 Simon J. Gerraty
 #
-#	This file is provided in the hope that it will
-#	be of use.  There is absolutely NO WARRANTY.
-#	Permission to copy, redistribute or otherwise
-#	use this file is hereby granted provided that 
-#	the above copyright notice and this notice are
-#	left intact. 
+#	SPDX-License-Identifier: BSD-2-Clause
 #      
 #	Please send copies of changes and bug-fixes to:
 #	sjg@crufty.net
@@ -63,7 +58,7 @@ extract_doc() {
         *) break;;
         esac
     done
-    sed -n -e "1d;/$eod/,\$d" -e '/^#\.[a-z]/d' -e '/^#/s,^# *,,p' "$@"
+    sed -n -e "1d;/$eod/,\$d" -e '/^#\.[a-z]/d' -e '/^# SPDX-License/d' -e '/^#/s,^# *,,p' "$@"
 }
 
 ##

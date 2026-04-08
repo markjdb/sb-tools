@@ -1,0 +1,10 @@
+#!/bin/sh
+
+case "$1" in
+--full) H=H; shift;;
+--short*) H=h; shift;;
+*) H=${GIT_LOG1_HASH:-h};;
+esac
+
+${GIT:-git} log --pretty="format:%$H %cs %al %s" "$@"
+

@@ -1,21 +1,35 @@
 
 # RCSid:
-#	$Id: isposix-shell.sh,v 1.2 2022/08/25 16:35:17 sjg Exp $
+#	$Id: isposix-shell.sh,v 1.12 2025/08/07 21:59:54 sjg Exp $
 #
 #	@(#) Copyright (c) 2021 Simon J. Gerraty
 #
-#	This file is provided in the hope that it will
-#	be of use.  There is absolutely NO WARRANTY.
-#	Permission to copy, redistribute or otherwise
-#	use this file is hereby granted provided that 
-#	the above copyright notice and this notice are
-#	left intact. 
+#	SPDX-License-Identifier: BSD-2-Clause
 #      
 #	Please send copies of changes and bug-fixes to:
 #	sjg@crufty.net
 #
 
 _isPOSIX_SHELL_SH=:
+
+# does local *actually* work?
+local_works() {
+    local _fu
+}
+
+##
+# test if we have local that works
+#
+# 'local' is not actually part of POSIX
+# though most POSIX shells support it,
+# but that does not ensure it actually works.
+if local_works > /dev/null 2>&1; then
+    _local=local
+else
+    _local=:
+fi
+# for backwards compatability
+local=$_local
 
 ##
 # set isPOSIX_SHELL
@@ -25,20 +39,14 @@ _isPOSIX_SHELL_SH=:
 #
 # We set isPOSIX_SHELL={true,false}
 # so we can use 'if $isPOSIX_SHELL; then'
-#
-# Apart from setting isPOSIX_SHELL we set local={local,:}
-# so that a function can do 'eval $local var' to make
-# var a local variable if we can.
-# In such cases any initialization of var should be on a separate line.
 # 
 if (echo ${PATH%:*}) > /dev/null 2>&1; then
-    # true should be a builtin
-    isPOSIX_SHELL=true
-    # you need to eval $local var
-    local=local
+    # true should be a builtin, : certainly is
+    isPOSIX_SHELL=:
     # reduce the cost of these
     basename() {
-        local b=${1%$2}
+        eval $_local b
+        b=${1%$2}
         echo ${b##*/}
     }
     dirname() {
@@ -48,14 +56,14 @@ if (echo ${PATH%:*}) > /dev/null 2>&1; then
         *) echo .;;
         esac
     }
-    case `type true` in
-    *built*) ;;
-    *) isPOSIX_SHELL=: ;;
-    esac
 else
     isPOSIX_SHELL=false
-    local=:
     false() {
         return 1
     }
 fi
+
+is_posix_shell() {
+    $isPOSIX_SHELL
+    return
+}
