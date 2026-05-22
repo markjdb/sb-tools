@@ -277,6 +277,7 @@ case "$opt_n" in
 /*) sb=$opt_n;;
 *) sb=${opt_b:-${SB_BASE:-.}}/$opt_n;;
 esac
+SB_NAME=`basename $sb`
 
 run_hooks mksb_pre_create_hooks
 
